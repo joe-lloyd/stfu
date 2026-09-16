@@ -62,8 +62,32 @@ fn position_pill(win: &WebviewWindow) {
     }
 }
 
+/// Logs to stderr and to `stfu.log` next to the config file, so a bundled app (no terminal) is debuggable.
+fn init_logging() {
+    let mut builder =
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"));
+    if let Ok(path) = Config::path() {
+        let log_path = path.with_file_name("stfu.log");
+        let _ = std::fs::create_dir_all(path.parent().unwrap());
+        if let Ok(file) = std::fs::OpenOptions::new().create(true).append(true).open(&log_path) {
+            struct Tee(std::fs::File);
+            impl std::io::Write for Tee {
+                fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                    let _ = std::io::stderr().write_all(buf);
+                    self.0.write(buf)
+                }
+                fn flush(&mut self) -> std::io::Result<()> {
+                    self.0.flush()
+                }
+            }
+            builder.target(env_logger::Target::Pipe(Box::new(Tee(file))));
+        }
+    }
+    builder.init();
+}
+
 pub fn run() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    init_logging();
 
     let config = match Config::load() {
         Ok(c) => c,
