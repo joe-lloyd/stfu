@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>stfu</title>
+    <style>
+      html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; user-select: none; }
+      #pill {
+        box-sizing: border-box;
+        width: 100vw; height: 100vh;
+        display: flex; align-items: center; justify-content: center; gap: 10px;
+        padding: 0 16px;
+        border-radius: 999px;
+        background: rgba(20, 20, 24, 0.92);
+        box-shadow: 0 6px 24px rgba(0,0,0,0.35);
+        color: #eee; font: 500 12px -apple-system, system-ui, "Segoe UI", sans-serif;
+      }
+      #dot { width: 8px; height: 8px; border-radius: 50%; background: #ff4d4f; flex: none; }
+      #pill.processing #dot { background: #f5c542; animation: pulse 0.8s infinite alternate; }
+      #pill.error #dot { background: #ff4d4f; }
+      #pill.done #dot { background: #3ddc84; }
+      #wave { height: 28px; flex: 1; }
+      #label { flex: none; opacity: 0.85; white-space: nowrap; max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
+      @keyframes pulse { from { opacity: 0.4 } to { opacity: 1 } }
+    </style>
+  </head>
+  <body>
+    <div id="pill">
+      <div id="dot"></div>
+      <canvas id="wave"></canvas>
+      <div id="label">Listening</div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
