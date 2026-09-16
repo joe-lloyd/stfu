@@ -57,10 +57,20 @@ mod imp {
                     CGEventTapLocation::HID,
                     CGEventTapPlacement::HeadInsertEventTap,
                     CGEventTapOptions::ListenOnly,
-                    vec![CGEventType::FlagsChanged, CGEventType::KeyDown, CGEventType::KeyUp],
-                    |_proxy, _etype, event| {
+                    // Only modifier-flag changes matter for a modifier hotkey. Key up/down events
+                    // can carry flags without the Fn bit and would read as a false release.
+                    vec![CGEventType::FlagsChanged],
+                    |_proxy, etype, event| {
                         let flags = event.get_flags();
                         let all_held = flags.contains(required);
+                        log::debug!(
+                            "tap event {:?} keycode {} flags {:#x} held={all_held}",
+                            etype,
+                            event.get_integer_value_field(
+                                core_graphics::event::EventField::KEYBOARD_EVENT_KEYCODE
+                            ),
+                            flags.bits()
+                        );
                         let mut active = active.lock().unwrap();
                         if all_held && !*active {
                             *active = true;

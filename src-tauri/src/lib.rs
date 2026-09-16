@@ -68,6 +68,7 @@ fn position_pill(win: &WebviewWindow) {
 fn init_logging() {
     let mut builder =
         env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"));
+    builder.format_timestamp_millis();
     if let Ok(path) = Config::path() {
         let log_path = path.with_file_name("stfu.log");
         let _ = std::fs::create_dir_all(path.parent().unwrap());
@@ -206,6 +207,7 @@ fn pipeline_loop(
     while let Ok(ev) = rx.recv() {
         match ev {
             HotkeyEvent::Down => {
+                log::info!("hotkey down");
                 if busy.load(Ordering::SeqCst) || recording {
                     continue;
                 }
@@ -229,6 +231,7 @@ fn pipeline_loop(
                 }
             }
             HotkeyEvent::Up => {
+                log::info!("hotkey up");
                 if !recording {
                     continue;
                 }
