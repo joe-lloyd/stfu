@@ -18,7 +18,6 @@ pub enum HotkeyEvent {
 #[cfg(target_os = "macos")]
 mod imp {
     use super::*;
-    use core_foundation::runloop::CFRunLoop;
     use core_graphics::event::{
         CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement,
         CGEventType, CallbackResult,
@@ -52,15 +51,30 @@ mod imp {
         std::thread::Builder::new()
             .name("hotkey".into())
             .spawn(move || {
-                let active = Mutex::new(false);
-                let result = CGEventTap::with_enabled(
+                use core_foundation::runloop::{kCFRunLoopDefaultMode, CFRunLoop};
+                use std::sync::atomic::{AtomicBool, Ordering};
+                use std::sync::Arc;
+
+                let active = Arc::new(Mutex::new(false));
+                let needs_reenable = Arc::new(AtomicBool::new(false));
+                let reenable_flag = needs_reenable.clone();
+
+                // Only modifier-flag changes matter for a modifier hotkey. Key up/down events
+                // can carry flags without the Fn bit and would read as a false release.
+                let tap = CGEventTap::new(
                     CGEventTapLocation::HID,
                     CGEventTapPlacement::HeadInsertEventTap,
                     CGEventTapOptions::ListenOnly,
-                    // Only modifier-flag changes matter for a modifier hotkey. Key up/down events
-                    // can carry flags without the Fn bit and would read as a false release.
                     vec![CGEventType::FlagsChanged],
-                    |_proxy, etype, event| {
+                    move |_proxy, etype, event| {
+                        match etype {
+                            CGEventType::TapDisabledByTimeout | CGEventType::TapDisabledByUserInput => {
+                                log::warn!("event tap disabled by macOS ({etype:?}); re-enabling");
+                                reenable_flag.store(true, Ordering::SeqCst);
+                                return CallbackResult::Keep;
+                            }
+                            _ => {}
+                        }
                         let flags = event.get_flags();
                         let all_held = flags.contains(required);
                         log::debug!(
@@ -81,13 +95,37 @@ mod imp {
                         }
                         CallbackResult::Keep
                     },
-                    || CFRunLoop::run_current(),
                 );
-                if result.is_err() {
-                    log::error!(
-                        "could not install the global key listener. Grant Accessibility and Input \
-                         Monitoring to this app (or to your terminal when running in dev), then restart."
+                let tap = match tap {
+                    Ok(t) => t,
+                    Err(_) => {
+                        log::error!(
+                            "could not install the global key listener. Grant Accessibility and Input \
+                             Monitoring to this app, then restart."
+                        );
+                        return;
+                    }
+                };
+                let source = match tap.mach_port().create_runloop_source(0) {
+                    Ok(s) => s,
+                    Err(_) => {
+                        log::error!("could not create run loop source for the key listener");
+                        return;
+                    }
+                };
+                let run_loop = CFRunLoop::get_current();
+                run_loop.add_source(&source, unsafe { kCFRunLoopDefaultMode });
+                tap.enable();
+                log::info!("global key listener installed");
+                loop {
+                    CFRunLoop::run_in_mode(
+                        unsafe { kCFRunLoopDefaultMode },
+                        std::time::Duration::from_millis(500),
+                        false,
                     );
+                    if needs_reenable.swap(false, Ordering::SeqCst) {
+                        tap.enable();
+                    }
                 }
             })
             .expect("spawn hotkey thread");
