@@ -56,7 +56,7 @@ fn position_pill(win: &WebviewWindow) {
         let scale = monitor.scale_factor();
         let (w, h) = match win.outer_size() {
             Ok(s) => (s.width as f64, s.height as f64),
-            Err(_) => (260.0 * scale, 48.0 * scale),
+            Err(_) => (190.0 * scale, 40.0 * scale),
         };
         let x = monitor.position().x as f64 + (size.width as f64 - w) / 2.0;
         let y = monitor.position().y as f64 + size.height as f64 - h - 90.0 * scale;
@@ -349,7 +349,7 @@ fn finish(app: &AppHandle, result: anyhow::Result<Option<String>>) {
         Ok(None) => Duration::ZERO,
         Ok(Some(_)) => {
             set_state(app, "done", None);
-            Duration::from_millis(600)
+            Duration::from_millis(1000) // ripple + fade-out play inside the webview
         }
         Err(e) => {
             log::error!("dictation failed: {e:#}");
