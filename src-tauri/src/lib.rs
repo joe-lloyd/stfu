@@ -7,6 +7,7 @@ mod llm;
 #[cfg(target_os = "macos")]
 mod permissions;
 mod stt;
+mod updater;
 
 use audio::Recorder;
 use config::Config;
@@ -113,6 +114,7 @@ pub fn run() {
     let shared: SharedConfig = Arc::new(RwLock::new(config.clone()));
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(shared.clone())
         .invoke_handler(tauri::generate_handler![
             commands::get_config,
@@ -132,22 +134,39 @@ pub fn run() {
             }
         })
         .setup(move |app| {
-            // Tray with Settings and Quit, since the app has no main window.
+            // Menu bar / tray app: no Dock icon, no app switcher entry. Tauri sets the activation
+            // policy at runtime, so LSUIElement in Info.plist alone is not enough.
+            #[cfg(target_os = "macos")]
+            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
+            // Tray with Settings, Check for updates and Quit, since the app has no main window.
             let settings = MenuItemBuilder::with_id("settings", "Settings…").build(app)?;
+            let update = MenuItemBuilder::with_id("update", "Check for updates").build(app)?;
             let quit = MenuItemBuilder::with_id("quit", "Quit stfu").build(app)?;
-            let menu = MenuBuilder::new(app).items(&[&settings, &quit]).build()?;
+            let menu = MenuBuilder::new(app).items(&[&settings, &update, &quit]).build()?;
             let mut tray = TrayIconBuilder::new()
                 .menu(&menu)
-                .tooltip(format!("stfu — hold {} to dictate", config.hotkey.join("+")))
+                .tooltip(format!("stfu {} — hold {} to dictate", env!("CARGO_PKG_VERSION"), config.hotkey.join("+")))
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "quit" => app.exit(0),
                     "settings" => show_settings(app),
+                    "update" => updater::check_now(app.clone()),
                     _ => {}
                 });
+            #[cfg(target_os = "macos")]
+            {
+                // Monochrome template image: macOS tints it for light/dark menu bars.
+                let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-template@2x.png"))?;
+                tray = tray.icon(icon).icon_as_template(true);
+            }
+            #[cfg(not(target_os = "macos"))]
             if let Some(icon) = app.default_window_icon() {
                 tray = tray.icon(icon.clone());
             }
             tray.build(app)?;
+
+            // Background auto-update: first check shortly after launch, then every few hours.
+            updater::start(app.handle().clone());
 
             #[cfg(target_os = "macos")]
             {

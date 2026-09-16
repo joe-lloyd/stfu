@@ -33,6 +33,12 @@ irm https://raw.githubusercontent.com/joe-lloyd/stfu/main/scripts/install.ps1 | 
 
 Pin a version with `STFU_VERSION=v0.1.0` (or `$env:STFU_VERSION`). Windows hotkey is **Ctrl+Win**; macOS is **Fn**.
 
+## Auto-update
+
+The app checks GitHub Releases about 20 seconds after launch and every six hours after that (also on demand from the tray menu), verifies the download against the minisign public key in `tauri.conf.json`, installs, and restarts itself. Releases are signed with the same `stfu Dev Signing` certificate every time, so on macOS the Accessibility, Input Monitoring and Microphone grants survive updates.
+
+Secrets that make this work live in the GitHub repo (`APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`). The originals are on Joe's Mac in `~/.stfu-signing/` and `~/.tauri/`. **Back those up**: losing the updater private key means existing installs can never update again, and losing the certificate means one more round of permission prompts.
+
 ## Releasing
 
 Push a tag and GitHub Actions builds macOS (universal), Windows (x64) and Linux (x64) and publishes a release with the install commands in its notes:
