@@ -10,7 +10,7 @@ MVP scope. See `SPEC.md` for the full feature spec this grows towards.
 hold hotkey -> record mic -> release -> speech-to-text -> LLM cleanup -> Cmd/Ctrl+V into the focused app
 ```
 
-- Rust core (Tauri 2): global hotkey via `rdev`, audio via `cpal`, paste via clipboard + `enigo`.
+- Rust core (Tauri 2): global hotkey via a native CGEventTap on macOS and `rdev` on Windows, audio via `cpal`, paste via clipboard + `enigo`.
 - Tiny TypeScript webview for the waveform pill. No settings UI yet: edit `config.json`.
 - Speech-to-text: any OpenAI-compatible `/audio/transcriptions` endpoint. Default is Groq `whisper-large-v3-turbo` (fast, cheap).
 - Cleanup: any OpenAI-compatible `/chat/completions` endpoint. Default is OpenCode Zen with the free `big-pickle` model.
@@ -47,7 +47,7 @@ or put them in the config file created on first launch:
 }
 ```
 
-Hotkey names: `Function`, `ControlLeft`, `ControlRight`, `MetaLeft`, `MetaRight`, `Alt`, `AltGr`, `ShiftLeft`, `ShiftRight`, `CapsLock`. Multiple names means all must be held. Windows default is `["ControlLeft", "MetaLeft"]` (Ctrl+Win).
+Hotkey names: `Function`, `ControlLeft`, `ControlRight`, `MetaLeft`, `MetaRight`, `Alt`, `AltGr`, `ShiftLeft`, `ShiftRight`, `CapsLock`. Multiple names means all must be held. On macOS the listener reads modifier flags, so left and right variants are treated the same and only modifier keys can be used. Windows default is `["ControlLeft", "MetaLeft"]` (Ctrl+Win).
 
 Set `llm.enabled` to `false` to paste the raw transcript with no cleanup. Any OpenAI-compatible provider works for either role, including a local Ollama or LM Studio server (`http://localhost:11434/v1`).
 
