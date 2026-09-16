@@ -208,6 +208,10 @@ fn pipeline_loop(
                         continue;
                     }
                 };
+                // Keep the most recent take next to the config for debugging ("what did it hear?").
+                if let Ok(path) = Config::path() {
+                    let _ = std::fs::write(path.with_file_name("last.wav"), &wav);
+                }
                 busy.store(true, Ordering::SeqCst);
                 set_state(&app, "processing", Some("Transcribing…".into()));
 
