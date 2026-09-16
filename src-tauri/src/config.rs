@@ -60,8 +60,9 @@ impl Default for Config {
             },
             llm: LlmConfig {
                 enabled: true,
-                base_url: "https://opencode.ai/zen/v1".into(),
-                model: "big-pickle".into(),
+                // Groq's free tier covers both roles with one key, so it is the default for both.
+                base_url: "https://api.groq.com/openai/v1".into(),
+                model: "qwen/qwen3.8-27b".into(),
                 api_key: String::new(),
                 timeout_secs: default_timeout(),
             },

@@ -20,7 +20,7 @@ const LLM_PRESETS: Record<string, { url: string; models: string[]; keyUrl: strin
     hint: "Free models are promotional and may disappear. Sign in at opencode.ai/zen and copy the API key.",
   },
   openai: { url: "https://api.openai.com/v1", models: ["gpt-5-mini", "gpt-5"], keyUrl: "https://platform.openai.com/api-keys", hint: "" },
-  groq: { url: "https://api.groq.com/openai/v1", models: ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"], keyUrl: "https://console.groq.com/keys", hint: "Same Groq key as speech-to-text works here." },
+  groq: { url: "https://api.groq.com/openai/v1", models: ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"], keyUrl: "https://console.groq.com/keys", hint: "Same Groq key as speech-to-text works here. Free tier. Qwen keeps every sentence; gpt-oss-20b is faster but sometimes drops text." },
   ollama: { url: "http://localhost:11434/v1", models: ["llama3.2", "qwen2.5"], keyUrl: "https://ollama.com/download", hint: "Runs locally. Any non-empty key is accepted; use \"ollama\"." },
   custom: { url: "", models: [], keyUrl: "", hint: "" },
 };

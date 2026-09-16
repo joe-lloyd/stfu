@@ -13,7 +13,7 @@ hold hotkey -> record mic -> release -> speech-to-text -> LLM cleanup -> Cmd/Ctr
 - Rust core (Tauri 2): global hotkey via a native CGEventTap on macOS and `rdev` on Windows, audio via `cpal`, paste via clipboard + `enigo`.
 - Tiny TypeScript webview for the waveform pill. No settings UI yet: edit `config.json`.
 - Speech-to-text: any OpenAI-compatible `/audio/transcriptions` endpoint. Default is Groq `whisper-large-v3-turbo` (fast, cheap).
-- Cleanup: any OpenAI-compatible `/chat/completions` endpoint. Default is OpenCode Zen with the free `big-pickle` model.
+- Cleanup: any OpenAI-compatible `/chat/completions` endpoint. Default is Groq `qwen/qwen3.8-27b` on the free tier, so one Groq key covers both roles. OpenCode Zen, OpenAI and local Ollama are presets too.
 
 ## Setup
 
@@ -45,7 +45,7 @@ or put them in the config file created on first launch:
 {
   "hotkey": ["Function"],
   "stt": { "base_url": "https://api.groq.com/openai/v1", "model": "whisper-large-v3-turbo", "api_key": "", "language": "" },
-  "llm": { "enabled": true, "base_url": "https://opencode.ai/zen/v1", "model": "big-pickle", "api_key": "", "timeout_secs": 8 }
+  "llm": { "enabled": true, "base_url": "https://api.groq.com/openai/v1", "model": "qwen/qwen3.8-27b", "api_key": "", "timeout_secs": 8 }
 }
 ```
 
