@@ -27,7 +27,9 @@ pnpm tauri build        # produce .app/.dmg (macOS) or .msi/.exe (Windows)
 
 ### Keys
 
-Get keys from [console.groq.com](https://console.groq.com) (speech-to-text) and [opencode.ai/zen](https://opencode.ai/zen) (cleanup, free models available). Either export them:
+On first launch (or whenever a key is missing) the **Settings** window opens. Pick a provider, click "Get a key" to open the provider's key page, paste the key, hit **Test**, then **Save**. Settings is also in the menu bar / tray menu.
+
+Alternatively, export keys as environment variables:
 
 ```sh
 export STFU_STT_API_KEY=...
@@ -77,7 +79,7 @@ No permission dialogs. The keyboard hook cannot see elevated (admin) windows, so
 ## Known limitations (MVP)
 
 - API keys live in a plain JSON file or env vars, not the OS keychain.
-- No settings UI, no dictionary, no snippets, no history, no per-app styles. All in `SPEC.md`.
+- Settings covers providers and keys only. No dictionary, snippets, history or per-app styles yet. All in `SPEC.md`.
 - Paste goes through the clipboard; apps that block paste (some password fields, some terminals) will not receive text.
 - OpenCode Zen free models are promotional and may be withdrawn; switch `llm.model` if one stops responding. Some Zen models are served on `/responses` or `/messages` instead of `/chat/completions`; pick a model listed under chat completions.
 - Unsigned builds: Gatekeeper and SmartScreen will warn on first launch.

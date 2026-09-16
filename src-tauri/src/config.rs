@@ -94,6 +94,19 @@ impl Config {
         Ok(cfg)
     }
 
+    pub fn save(&self) -> Result<()> {
+        let path = Self::path()?;
+        std::fs::create_dir_all(path.parent().unwrap())?;
+        std::fs::write(&path, serde_json::to_string_pretty(self)?)
+            .with_context(|| format!("writing {}", path.display()))?;
+        Ok(())
+    }
+
+    /// True when a dictation could not succeed with the current keys.
+    pub fn needs_setup(&self) -> bool {
+        self.stt_key().is_none() || (self.llm.enabled && self.llm_key().is_none())
+    }
+
     pub fn stt_key(&self) -> Option<String> {
         first_non_empty(&self.stt.api_key, &["STFU_STT_API_KEY", "GROQ_API_KEY", "OPENAI_API_KEY"])
     }

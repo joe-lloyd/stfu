@@ -162,6 +162,13 @@ fn push(
     }
 }
 
+/// A WAV of near-silence, used to validate speech-to-text credentials without a microphone.
+pub fn silent_wav(seconds: f32) -> Result<Vec<u8>> {
+    let n = (TARGET_RATE as f32 * seconds) as usize;
+    let samples: Vec<f32> = (0..n).map(|i| if i % 97 == 0 { 0.0005 } else { 0.0 }).collect();
+    encode_wav(&samples, TARGET_RATE, 1)
+}
+
 /// Downmixes to mono, resamples to 16 kHz (linear), trims edge silence, writes 16-bit PCM WAV.
 fn encode_wav(samples: &[f32], rate: u32, channels: u16) -> Result<Vec<u8>> {
     let ch = channels.max(1) as usize;

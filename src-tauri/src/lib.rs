@@ -1,4 +1,5 @@
 mod audio;
+mod commands;
 mod config;
 mod hotkey;
 mod inject;
@@ -10,7 +11,7 @@ use config::Config;
 use hotkey::HotkeyEvent;
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::{mpsc, Arc, RwLock};
 use std::time::{Duration, Instant};
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder},
@@ -19,6 +20,9 @@ use tauri::{
 };
 
 const PILL: &str = "pill";
+const SETTINGS: &str = "settings";
+
+pub type SharedConfig = Arc<RwLock<Config>>;
 
 #[derive(Serialize, Clone)]
 struct StateEvent<'a> {
@@ -33,6 +37,14 @@ fn set_state(app: &AppHandle, phase: &str, message: Option<String>) {
 
 fn pill(app: &AppHandle) -> Option<WebviewWindow> {
     app.get_webview_window(PILL)
+}
+
+fn show_settings(app: &AppHandle) {
+    if let Some(win) = app.get_webview_window(SETTINGS) {
+        let _ = win.show();
+        let _ = win.unminimize();
+        let _ = win.set_focus();
+    }
 }
 
 /// Bottom-centre of the primary monitor, a little above the dock/taskbar.
@@ -71,23 +83,49 @@ pub fn run() {
         config.llm.enabled
     );
 
+    let shared: SharedConfig = Arc::new(RwLock::new(config.clone()));
+
     tauri::Builder::default()
+        .manage(shared.clone())
+        .invoke_handler(tauri::generate_handler![
+            commands::get_config,
+            commands::config_path,
+            commands::save_config,
+            commands::test_stt,
+            commands::test_llm,
+            commands::open_url,
+        ])
+        .on_window_event(|window, event| {
+            // Closing the settings window hides it so it can be reopened from the tray.
+            if window.label() == SETTINGS {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
         .setup(move |app| {
-            // Tray with a Quit item, since the app has no main window.
+            // Tray with Settings and Quit, since the app has no main window.
+            let settings = MenuItemBuilder::with_id("settings", "Settings…").build(app)?;
             let quit = MenuItemBuilder::with_id("quit", "Quit stfu").build(app)?;
-            let menu = MenuBuilder::new(app).items(&[&quit]).build()?;
+            let menu = MenuBuilder::new(app).items(&[&settings, &quit]).build()?;
             let mut tray = TrayIconBuilder::new()
                 .menu(&menu)
                 .tooltip(format!("stfu — hold {} to dictate", config.hotkey.join("+")))
-                .on_menu_event(|app, event| {
-                    if event.id.as_ref() == "quit" {
-                        app.exit(0);
-                    }
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "quit" => app.exit(0),
+                    "settings" => show_settings(app),
+                    _ => {}
                 });
             if let Some(icon) = app.default_window_icon() {
                 tray = tray.icon(icon.clone());
             }
             tray.build(app)?;
+
+            // First run or missing keys: open settings straight away.
+            if config.needs_setup() {
+                show_settings(&app.handle().clone());
+            }
 
             // Global hotkey listener.
             let keys = config
@@ -101,7 +139,7 @@ pub fn run() {
 
             let recorder = Recorder::spawn();
             let handle = app.handle().clone();
-            let cfg = Arc::new(config.clone());
+            let cfg = shared.clone();
             std::thread::Builder::new()
                 .name("pipeline".into())
                 .spawn(move || pipeline_loop(handle, cfg, recorder, rx))
@@ -115,7 +153,7 @@ pub fn run() {
 /// Owns the record -> transcribe -> clean -> paste flow. One dictation at a time.
 fn pipeline_loop(
     app: AppHandle,
-    cfg: Arc<Config>,
+    cfg: SharedConfig,
     recorder: Recorder,
     rx: mpsc::Receiver<HotkeyEvent>,
 ) {
@@ -173,10 +211,13 @@ fn pipeline_loop(
                 busy.store(true, Ordering::SeqCst);
                 set_state(&app, "processing", Some("Transcribing…".into()));
 
-                let (app2, cfg2, client2, busy2) =
-                    (app.clone(), cfg.clone(), client.clone(), busy.clone());
+                let snapshot = cfg.read().unwrap().clone();
+                if snapshot.needs_setup() {
+                    show_settings(&app);
+                }
+                let (app2, client2, busy2) = (app.clone(), client.clone(), busy.clone());
                 rt.spawn(async move {
-                    let result = process(&app2, &cfg2, &client2, wav).await;
+                    let result = process(&app2, &snapshot, &client2, wav).await;
                     finish(&app2, result);
                     busy2.store(false, Ordering::SeqCst);
                 });

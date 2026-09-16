@@ -28,6 +28,18 @@
         "skipTaskbar": true,
         "visibleOnAllWorkspaces": true,
         "acceptFirstMouse": false
+      },
+      {
+        "label": "settings",
+        "title": "stfu settings",
+        "url": "settings.html",
+        "width": 600,
+        "height": 720,
+        "minWidth": 520,
+        "minHeight": 600,
+        "visible": false,
+        "resizable": true,
+        "center": true
       }
     ],
     "security": {
