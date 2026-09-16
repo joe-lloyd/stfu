@@ -19,7 +19,6 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"
 reqwest = { version = "0.13", default-features = false, features = ["json", "multipart", "rustls", "http2"] }
 cpal = "0.18"
 hound = "3.5"
-enigo = "0.6"
 arboard = "3"
 dirs = "7"
 anyhow = "1"
@@ -32,6 +31,7 @@ core-foundation = "0.10"
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 rdev = "0.5"
+enigo = "0.6"
 
 [profile.release]
 codegen-units = 1
