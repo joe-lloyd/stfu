@@ -150,7 +150,14 @@ pub fn run() {
             tray.build(app)?;
 
             #[cfg(target_os = "macos")]
-            log::info!("accessibility trusted: {}", permissions::accessibility_trusted());
+            {
+                let trusted = permissions::accessibility_trusted();
+                log::info!("accessibility trusted: {trusted}");
+                if !trusted {
+                    log::warn!("requesting Accessibility permission; restart the app after granting it");
+                    permissions::request_accessibility();
+                }
+            }
 
             // Ask macOS for microphone access explicitly. CoreAudio alone does not trigger the
             // system prompt, and without a grant macOS silently delivers all-zero audio.
