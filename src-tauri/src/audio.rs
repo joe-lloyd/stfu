@@ -165,7 +165,7 @@ fn push(
 /// A WAV of near-silence, used to validate speech-to-text credentials without a microphone.
 pub fn silent_wav(seconds: f32) -> Result<Vec<u8>> {
     let n = (TARGET_RATE as f32 * seconds) as usize;
-    let samples: Vec<f32> = (0..n).map(|i| if i % 97 == 0 { 0.0005 } else { 0.0 }).collect();
+    let samples: Vec<f32> = (0..n).map(|i| if i % 97 == 0 { 0.002 } else { 0.0 }).collect();
     encode_wav(&samples, TARGET_RATE, 1)
 }
 
@@ -194,6 +194,13 @@ fn encode_wav(samples: &[f32], rate: u32, channels: u16) -> Result<Vec<u8>> {
     };
     if resampled.len() < TARGET_RATE as usize / 4 {
         return Err(anyhow!("recording too short"));
+    }
+    // macOS delivers all-zero audio (no error) when Microphone permission is missing.
+    let peak = resampled.iter().fold(0f32, |m, s| m.max(s.abs()));
+    if peak < 0.0005 {
+        return Err(anyhow!(
+            "microphone delivered silence: allow Microphone access for this app in System Settings > Privacy & Security"
+        ));
     }
     let spec = hound::WavSpec {
         channels: 1,
