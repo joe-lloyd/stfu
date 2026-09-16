@@ -15,7 +15,35 @@ hold hotkey -> record mic -> release -> speech-to-text -> LLM cleanup -> Cmd/Ctr
 - Speech-to-text: any OpenAI-compatible `/audio/transcriptions` endpoint. Default is Groq `whisper-large-v3-turbo` (fast, cheap).
 - Cleanup: any OpenAI-compatible `/chat/completions` endpoint. Default is Groq `qwen/qwen3.8-27b` on the free tier, so one Groq key covers both roles. OpenCode Zen, OpenAI and local Ollama are presets too.
 
-## Setup
+## Install (one command)
+
+Grab the latest [release](https://github.com/joe-lloyd/stfu/releases). Builds are unsigned, so the installers also clear the download quarantine that would otherwise make Gatekeeper or SmartScreen refuse to open them.
+
+macOS or Linux:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/joe-lloyd/stfu/main/scripts/install.sh | sh
+```
+
+Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/joe-lloyd/stfu/main/scripts/install.ps1 | iex
+```
+
+Pin a version with `STFU_VERSION=v0.1.0` (or `$env:STFU_VERSION`). Windows hotkey is **Ctrl+Win**; macOS is **Fn**.
+
+## Releasing
+
+Push a tag and GitHub Actions builds macOS (universal), Windows (x64) and Linux (x64) and publishes a release with the install commands in its notes:
+
+```sh
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+`check.yml` type-checks all three platforms on every push to `main`. Both workflows run on GitHub-hosted runners; change `runs-on` to a self-hosted label to move a job onto a lab machine.
+
+## Build from source
 
 Prerequisites: Rust (`rustup`), Node 20+, pnpm. On macOS, Xcode command line tools. On Windows, the WebView2 runtime (preinstalled on Windows 11) and the MSVC build tools.
 
@@ -67,7 +95,7 @@ The default macOS hotkey is `Fn`. macOS binds `Fn` to dictation or emoji by defa
 
 ### Windows
 
-No permission dialogs. The keyboard hook cannot see elevated (admin) windows, so dictation into an admin PowerShell will not work unless stfu also runs elevated.
+Default hotkey is Ctrl+Win (`["ControlLeft", "MetaLeft"]`). No permission dialogs. The keyboard hook cannot see elevated (admin) windows, so dictation into an admin PowerShell will not work unless stfu also runs elevated.
 
 ## Behaviour details
 
