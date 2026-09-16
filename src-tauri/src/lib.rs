@@ -4,6 +4,8 @@ mod config;
 mod hotkey;
 mod inject;
 mod llm;
+#[cfg(target_os = "macos")]
+mod permissions;
 mod stt;
 
 use audio::Recorder;
@@ -145,6 +147,20 @@ pub fn run() {
                 tray = tray.icon(icon.clone());
             }
             tray.build(app)?;
+
+            // Ask macOS for microphone access explicitly. CoreAudio alone does not trigger the
+            // system prompt, and without a grant macOS silently delivers all-zero audio.
+            #[cfg(target_os = "macos")]
+            permissions::request_microphone(|granted| {
+                if granted {
+                    log::info!("microphone access granted");
+                } else {
+                    log::error!("microphone access denied: enable stfu under System Settings > Privacy & Security > Microphone");
+                    let _ = std::process::Command::new("open")
+                        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
+                        .spawn();
+                }
+            });
 
             // First run or missing keys: open settings straight away.
             if config.needs_setup() {
