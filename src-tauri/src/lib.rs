@@ -154,8 +154,18 @@ pub fn run() {
                 let trusted = permissions::accessibility_trusted();
                 log::info!("accessibility trusted: {trusted}");
                 if !trusted {
-                    log::warn!("requesting Accessibility permission; restart the app after granting it");
+                    log::warn!("requesting Accessibility permission; will restart once granted");
                     permissions::request_accessibility();
+                    // macOS only applies a new Accessibility grant to a fresh process, and until
+                    // then synthetic keystrokes are dropped. Poll and restart ourselves when it lands.
+                    let handle = app.handle().clone();
+                    std::thread::spawn(move || loop {
+                        std::thread::sleep(Duration::from_secs(2));
+                        if permissions::accessibility_trusted() {
+                            log::info!("Accessibility granted; restarting to apply it");
+                            handle.restart();
+                        }
+                    });
                 }
             }
 

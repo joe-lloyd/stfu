@@ -55,13 +55,13 @@ Set `llm.enabled` to `false` to paste the raw transcript with no cleanup. Any Op
 
 ### macOS permissions
 
-The app needs three permissions. macOS attributes them to the *process that asks*, so in `pnpm tauri dev` that is your terminal app (Terminal, iTerm, T3 Code, ...), and in the built `.app` it is stfu itself.
+The app needs three permissions and asks for each on startup: **Microphone**, **Accessibility** (sending the paste keystroke to other apps) and **Input Monitoring** (the global key listener). Allow each prompt. Accessibility only applies to a fresh process, so the app restarts itself once you grant it.
 
-1. **Microphone**: prompted automatically on first recording.
-2. **Accessibility**: System Settings > Privacy & Security > Accessibility. Needed to observe key-up of the hotkey and to send the paste keystroke.
-3. **Input Monitoring**: System Settings > Privacy & Security > Input Monitoring. Needed for the global key listener.
+Run the built `stfu.app` (from `pnpm tauri build --debug --bundles app`, or `open src-tauri/target/debug/bundle/macos/stfu.app`) rather than `pnpm tauri dev` when testing permissions: in dev mode macOS attributes them to the terminal that launched the process, and a missing microphone grant shows up as silence rather than an error.
 
-If you see `global key listener failed` in the log, one of the last two is missing. Restart the app after granting.
+Builds are signed with a local self-signed identity named `stfu Dev Signing` so grants survive rebuilds. Create one once with Keychain Access (Certificate Assistant > Create a Certificate, type Code Signing) or remove `signingIdentity` from `tauri.conf.json` to fall back to ad-hoc signing, in which case you must re-grant after every build. The `Entitlements.plist` audio-input entry is required under the hardened runtime; without it the microphone is denied silently.
+
+Logs: `~/Library/Application Support/stfu/stfu.log`. Last recording: `last.wav` in the same folder.
 
 The default macOS hotkey is `Fn`. macOS binds `Fn` to dictation or emoji by default: turn that off in System Settings > Keyboard > "Press fn key to" > Do Nothing, otherwise both fire.
 
