@@ -192,15 +192,12 @@ fn encode_wav(samples: &[f32], rate: u32, channels: u16) -> Result<Vec<u8>> {
             })
             .collect()
     };
-    if resampled.len() < TARGET_RATE as usize / 4 {
-        return Err(anyhow!("recording too short"));
-    }
-    // macOS delivers all-zero audio (no error) when Microphone permission is missing.
+    // Too short, or nothing but silence (also what macOS delivers when the mic is not allowed):
+    // return an empty WAV so the caller can skip quietly instead of showing an error.
     let peak = resampled.iter().fold(0f32, |m, s| m.max(s.abs()));
-    if peak < 0.0005 {
-        return Err(anyhow!(
-            "microphone delivered silence: allow Microphone access for this app in System Settings > Privacy & Security"
-        ));
+    if resampled.len() < TARGET_RATE as usize / 4 || peak < 0.0005 {
+        log::info!("skipping take: {} samples, peak {peak:.4}", resampled.len());
+        return Ok(Vec::new());
     }
     let spec = hound::WavSpec {
         channels: 1,

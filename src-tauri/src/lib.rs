@@ -242,6 +242,13 @@ fn pipeline_loop(
                     continue;
                 }
                 let wav = match wav {
+                    Ok(w) if w.is_empty() => {
+                        // Nothing usable was recorded: hide the pill, no error.
+                        if let Some(win) = pill(&app) {
+                            let _ = win.hide();
+                        }
+                        continue;
+                    }
                     Ok(w) => w,
                     Err(e) => {
                         finish(&app, Err(e));
@@ -270,17 +277,19 @@ fn pipeline_loop(
     }
 }
 
+/// Returns `Ok(None)` when there was nothing worth pasting (no speech), so the caller stays quiet.
 async fn process(
     app: &AppHandle,
     cfg: &Config,
     client: &reqwest::Client,
     wav: Vec<u8>,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<Option<String>> {
     let t0 = Instant::now();
     let raw = stt::transcribe(client, cfg, wav).await?;
     log::info!("stt {:?}: {raw:?}", t0.elapsed());
-    if raw.is_empty() {
-        anyhow::bail!("nothing heard");
+    if !raw.chars().any(|c| c.is_alphanumeric()) {
+        log::info!("no speech in transcript, skipping");
+        return Ok(None);
     }
 
     let text = if cfg.llm.enabled {
@@ -300,16 +309,22 @@ async fn process(
         raw.clone()
     };
 
+    if !text.chars().any(|c| c.is_alphanumeric()) {
+        log::info!("cleanup produced no text, skipping");
+        return Ok(None);
+    }
+
     set_state(app, "processing", Some("Pasting…".into()));
     let to_paste = text.clone();
     tokio::task::spawn_blocking(move || inject::paste(&to_paste)).await??;
     log::info!("total {:?}", t0.elapsed());
-    Ok(text)
+    Ok(Some(text))
 }
 
-fn finish(app: &AppHandle, result: anyhow::Result<String>) {
+fn finish(app: &AppHandle, result: anyhow::Result<Option<String>>) {
     let hide_after = match result {
-        Ok(_) => {
+        Ok(None) => Duration::ZERO,
+        Ok(Some(_)) => {
             set_state(app, "done", None);
             Duration::from_millis(600)
         }
