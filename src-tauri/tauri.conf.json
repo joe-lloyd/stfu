@@ -34,9 +34,9 @@
         "title": "stfu settings",
         "url": "settings.html",
         "width": 600,
-        "height": 720,
+        "height": 790,
         "minWidth": 520,
-        "minHeight": 600,
+        "minHeight": 640,
         "visible": false,
         "resizable": true,
         "center": true
