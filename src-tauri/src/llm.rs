@@ -13,7 +13,7 @@ Cleaning rules:
 - Apply self-corrections: "send it Tuesday, no, Wednesday" becomes "send it Wednesday".
 - Fix punctuation, capitalisation and obvious transcription errors. Keep the speaker's words, order and meaning; do not paraphrase, summarise, shorten, or add anything.
 - If the speaker clearly lists several items, format them as a bulleted list using "- " lines.
-- Keep the same language as the speaker.
+- Keep the same language as the speaker. Never translate: Dutch in means Dutch out.
 - Preserve technical terms, code identifiers, URLs and commands exactly.
 - Spoken formatting commands like "new paragraph" or "new line" become actual breaks.
 
@@ -98,7 +98,16 @@ pub async fn cleanup(client: &reqwest::Client, cfg: &Config, transcript: &str) -
         .llm_key()
         .context("no LLM API key: set llm.api_key in config.json or STFU_LLM_API_KEY")?;
     let base = cfg.llm.base_url.trim_end_matches('/');
-    let user = format!("Transcript: \"\"\"{transcript}\"\"\"");
+    // A pinned language is a hint, not an instruction to translate: someone who pins Dutch still
+    // dictates the odd English sentence, and "write it in Dutch" makes models translate that.
+    // Measured: the wording below keeps English as English and Dutch as Dutch.
+    let user = match crate::lang::english_name(cfg.stt.language.trim()) {
+        Some(name) => format!(
+            "The speaker usually dictates in {name}. Write \"cleaned\" in the same language as the \
+             transcript itself; never translate.\nTranscript: \"\"\"{transcript}\"\"\""
+        ),
+        None => format!("Transcript: \"\"\"{transcript}\"\"\""),
+    };
     let wire = wire_for(base, &cfg.llm.model, cfg.llm.wire.as_deref());
     let timeout = cfg.llm.timeout_secs.max(1);
 

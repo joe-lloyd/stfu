@@ -63,6 +63,12 @@ pnpm tauri dev          # run
 pnpm tauri build        # produce .app/.dmg (macOS) or .msi/.exe (Windows)
 ```
 
+### Dictation languages
+
+Whisper auto-detects the language by default, which is the right setting if you switch languages during the day. To pin one, use the tray menu's **Language** submenu (instant, no Settings window) or the dropdown in Settings. Twenty languages are listed, including Dutch, and any other ISO-639-1 code can be set as `stt.language` in the config.
+
+Pinning is a hint, not a translation instruction: with Dutch pinned, an English sentence still comes out in English. That wording is deliberate and measured, because telling the model to "write in Dutch" makes it translate the odd English dictation.
+
 ### OpenCode as the clean-up provider
 
 Pick "OpenCode" in Settings and press **Connect OpenCode**. If you have run `opencode auth login` and signed in to OpenCode Zen, the key is imported from the CLI's `auth.json`; otherwise the Zen page opens for you to paste one. The model dropdown is then filled live from Zen's model list, Free models first. Every Zen model is routed to its native endpoint automatically (chat completions, Responses, Anthropic Messages or Gemini), so Claude, GPT, Gemini, DeepSeek, Kimi, GLM and the rest all work through the one account. Zen has no speech-to-text, so section 1 still needs a Groq or OpenAI key. Set `llm.wire` in the config to force a wire format for a custom endpoint.

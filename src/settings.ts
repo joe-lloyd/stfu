@@ -13,6 +13,7 @@ const STT_PRESETS: Record<string, { url: string; model: string; keyUrl: string }
 };
 
 interface ZenModel { id: string; free: boolean; wire: string }
+interface Language { code: string; label: string }
 
 const LLM_PRESETS: Record<string, { url: string; models: string[]; keyUrl: string; hint: string }> = {
   zen: {
@@ -118,7 +119,7 @@ function collect(): Config {
       base_url: $<HTMLInputElement>("stt-url").value.trim(),
       model: $<HTMLInputElement>("stt-model").value.trim(),
       api_key: $<HTMLInputElement>("stt-key").value.trim(),
-      language: cfg.stt.language,
+      language: $<HTMLSelectElement>("stt-language").value,
     },
     llm: {
       enabled: $<HTMLInputElement>("llm-enabled").checked,
@@ -132,6 +133,11 @@ function collect(): Config {
 
 async function load() {
   cfg = await invoke<Config>("get_config");
+  const languages = await invoke<Language[]>("languages");
+  $<HTMLSelectElement>("stt-language").innerHTML = languages
+    .map((l) => `<option value="${l.code}">${l.label}</option>`)
+    .join("");
+  $<HTMLSelectElement>("stt-language").value = cfg.stt.language ?? "";
   $("cfgpath").textContent = await invoke<string>("config_path");
   $("hotkey").textContent = cfg.hotkey.join(" + ");
 

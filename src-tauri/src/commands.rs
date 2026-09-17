@@ -1,8 +1,15 @@
 //! Tauri commands used by the settings window.
 
 use crate::config::Config;
-use crate::{audio, llm, stt, SharedConfig};
-use tauri::State;
+use crate::{audio, lang, llm, stt, SharedConfig};
+use tauri::menu::{CheckMenuItem, Submenu};
+use tauri::{State, Wry};
+
+/// The tray's language submenu, so a change made in Settings updates the menu too.
+pub struct LangMenu {
+    pub items: Vec<CheckMenuItem<Wry>>,
+    pub submenu: Submenu<Wry>,
+}
 
 #[tauri::command]
 pub fn get_config(state: State<'_, SharedConfig>) -> Config {
@@ -15,11 +22,35 @@ pub fn config_path() -> String {
 }
 
 #[tauri::command]
-pub fn save_config(state: State<'_, SharedConfig>, cfg: Config) -> Result<(), String> {
+pub fn save_config(
+    state: State<'_, SharedConfig>,
+    lang_menu: State<'_, LangMenu>,
+    cfg: Config,
+) -> Result<(), String> {
     cfg.save().map_err(|e| format!("{e:#}"))?;
+    let code = cfg.stt.language.trim().to_string();
+    for (item, (c, _)) in lang_menu.items.iter().zip(lang::LANGUAGES) {
+        let _ = item.set_checked(*c == code);
+    }
+    let _ = lang_menu.submenu.set_text(format!("Language: {}", lang::label(&code)));
     *state.write().unwrap() = cfg;
     log::info!("config saved");
     Ok(())
+}
+
+#[derive(serde::Serialize)]
+pub struct Language {
+    pub code: String,
+    pub label: String,
+}
+
+/// The language list shown in Settings; same source as the tray submenu.
+#[tauri::command]
+pub fn languages() -> Vec<Language> {
+    lang::LANGUAGES
+        .iter()
+        .map(|(code, label)| Language { code: (*code).into(), label: (*label).into() })
+        .collect()
 }
 
 /// Sends half a second of silence to the transcription endpoint. A 200 proves URL, model and key.

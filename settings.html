@@ -52,6 +52,9 @@
           <label>Model</label>
           <input id="stt-model" placeholder="whisper-1" />
         </div>
+        <label>Language</label>
+        <select id="stt-language"></select>
+        <div class="hint">Auto-detect handles mixed languages well. Pin a language if detection keeps guessing wrong. Pinning is only a hint: dictate a sentence in another language and it stays in that language, never translated. Switch quickly from the tray menu.</div>
         <label>API key</label>
         <div class="row">
           <input id="stt-key" type="password" placeholder="Paste your key here" autocomplete="off" />

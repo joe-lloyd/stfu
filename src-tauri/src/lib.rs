@@ -3,6 +3,7 @@ mod commands;
 mod config;
 mod hotkey;
 mod inject;
+mod lang;
 mod llm;
 #[cfg(target_os = "macos")]
 mod permissions;
@@ -17,7 +18,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, RwLock};
 use std::time::{Duration, Instant};
 use tauri::{
-    menu::{CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder},
+    menu::{CheckMenuItem, CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder, SubmenuBuilder},
     tray::TrayIconBuilder,
     AppHandle, Emitter, Manager, PhysicalPosition, WebviewWindow,
 };
@@ -127,6 +128,7 @@ pub fn run() {
             commands::test_stt,
             commands::test_llm,
             commands::open_url,
+            commands::languages,
             commands::zen_models,
             commands::import_opencode_key,
         ])
@@ -157,7 +159,28 @@ pub fn run() {
                 }
             }
 
-            // Tray with Settings, Launch at login, Check for updates and Quit; the app has no main window.
+            // Language submenu: switch dictation language without opening Settings.
+            let current_lang = config.stt.language.trim().to_string();
+            let lang_items: Vec<CheckMenuItem<_>> = lang::LANGUAGES
+                .iter()
+                .map(|(code, label)| {
+                    CheckMenuItemBuilder::with_id(format!("lang:{code}"), *label)
+                        .checked(*code == current_lang)
+                        .build(app)
+                })
+                .collect::<tauri::Result<_>>()?;
+            let lang_refs: Vec<&dyn tauri::menu::IsMenuItem<_>> =
+                lang_items.iter().map(|i| i as &dyn tauri::menu::IsMenuItem<_>).collect();
+            let language_menu = SubmenuBuilder::new(app, format!("Language: {}", lang::label(&current_lang)))
+                .items(&lang_refs)
+                .build()?;
+
+            app.manage(commands::LangMenu {
+                items: lang_items.clone(),
+                submenu: language_menu.clone(),
+            });
+
+            // Tray with Settings, Language, Launch at login, Check for updates and Quit; the app has no main window.
             let settings = MenuItemBuilder::with_id("settings", "Settings…").build(app)?;
             let autostart = CheckMenuItemBuilder::with_id("autostart", "Launch at login")
                 .checked(config.launch_at_login)
@@ -165,12 +188,16 @@ pub fn run() {
             let update = MenuItemBuilder::with_id("update", "Check for updates").build(app)?;
             let quit = MenuItemBuilder::with_id("quit", "Quit stfu").build(app)?;
             let menu = MenuBuilder::new(app)
-                .items(&[&settings, &autostart])
+                .items(&[&settings])
+                .item(&language_menu)
+                .items(&[&autostart])
                 .separator()
                 .items(&[&update, &quit])
                 .build()?;
             let autostart_item = autostart.clone();
             let shared_for_tray = shared.clone();
+            let lang_items_for_tray = lang_items.clone();
+            let language_menu_for_tray = language_menu.clone();
             let mut tray = TrayIconBuilder::new()
                 .menu(&menu)
                 .tooltip(format!("stfu {} — hold {} to dictate", env!("CARGO_PKG_VERSION"), config.hotkey.join("+")))
@@ -178,6 +205,21 @@ pub fn run() {
                     "quit" => app.exit(0),
                     "settings" => show_settings(app),
                     "update" => updater::check_now(app.clone()),
+                    id if id.starts_with("lang:") => {
+                        let code = id.trim_start_matches("lang:").to_string();
+                        // Radio behaviour: the clicked item wins, every other one clears.
+                        for (item, (c, _)) in lang_items_for_tray.iter().zip(lang::LANGUAGES) {
+                            let _ = item.set_checked(*c == code);
+                        }
+                        let _ = language_menu_for_tray
+                            .set_text(format!("Language: {}", lang::label(&code)));
+                        let mut cfg = shared_for_tray.write().unwrap();
+                        cfg.stt.language = code.clone();
+                        match cfg.save() {
+                            Ok(()) => log::info!("dictation language set to {:?}", code),
+                            Err(e) => log::warn!("could not save config: {e:#}"),
+                        }
+                    }
                     "autostart" => {
                         use tauri_plugin_autostart::ManagerExt;
                         let enable = autostart_item.is_checked().unwrap_or(true);
