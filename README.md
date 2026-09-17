@@ -33,6 +33,10 @@ irm https://raw.githubusercontent.com/joe-lloyd/stfu/main/scripts/install.ps1 | 
 
 Pin a version with `STFU_VERSION=v0.1.0` (or `$env:STFU_VERSION`). Windows hotkey is **Ctrl+Win**; macOS is **Fn**.
 
+## Launch at login
+
+On by default: the app registers itself to start with your session (a LaunchAgent on macOS, the `Run` registry key on Windows) and re-applies that registration on every start, so it survives updates moving the bundle. Toggle it from the tray menu ("Launch at login") or set `launch_at_login` in the config file.
+
 ## Auto-update
 
 The app checks GitHub Releases about 20 seconds after launch and every six hours after that (also on demand from the tray menu), verifies the download against the minisign public key in `tauri.conf.json`, installs, and restarts itself. Releases are signed with the same `stfu Dev Signing` certificate every time, so on macOS the Accessibility, Input Monitoring and Microphone grants survive updates.

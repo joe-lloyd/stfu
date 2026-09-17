@@ -9,6 +9,13 @@ pub struct Config {
     pub hotkey: Vec<String>,
     pub stt: SttConfig,
     pub llm: LlmConfig,
+    /// Start with the OS session so dictation is always available. Toggle from the tray menu.
+    #[serde(default = "default_true")]
+    pub launch_at_login: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,6 +73,7 @@ impl Default for Config {
                 api_key: String::new(),
                 timeout_secs: default_timeout(),
             },
+            launch_at_login: true,
         }
     }
 }

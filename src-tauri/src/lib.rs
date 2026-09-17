@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, RwLock};
 use std::time::{Duration, Instant};
 use tauri::{
-    menu::{MenuBuilder, MenuItemBuilder},
+    menu::{CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder},
     tray::TrayIconBuilder,
     AppHandle, Emitter, Manager, PhysicalPosition, WebviewWindow,
 };
@@ -115,6 +115,10 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .manage(shared.clone())
         .invoke_handler(tauri::generate_handler![
             commands::get_config,
@@ -139,18 +143,59 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
-            // Tray with Settings, Check for updates and Quit, since the app has no main window.
+            // Launch at login: make the OS registration match the config on every start, so the
+            // setting follows the config file (and survives the app being moved by the updater).
+            {
+                use tauri_plugin_autostart::ManagerExt;
+                let auto = app.autolaunch();
+                let result = if config.launch_at_login { auto.enable() } else { auto.disable() };
+                match result {
+                    Ok(()) => log::info!("launch at login: {}", config.launch_at_login),
+                    Err(e) => log::warn!("could not update launch-at-login registration: {e}"),
+                }
+            }
+
+            // Tray with Settings, Launch at login, Check for updates and Quit; the app has no main window.
             let settings = MenuItemBuilder::with_id("settings", "Settings…").build(app)?;
+            let autostart = CheckMenuItemBuilder::with_id("autostart", "Launch at login")
+                .checked(config.launch_at_login)
+                .build(app)?;
             let update = MenuItemBuilder::with_id("update", "Check for updates").build(app)?;
             let quit = MenuItemBuilder::with_id("quit", "Quit stfu").build(app)?;
-            let menu = MenuBuilder::new(app).items(&[&settings, &update, &quit]).build()?;
+            let menu = MenuBuilder::new(app)
+                .items(&[&settings, &autostart])
+                .separator()
+                .items(&[&update, &quit])
+                .build()?;
+            let autostart_item = autostart.clone();
+            let shared_for_tray = shared.clone();
             let mut tray = TrayIconBuilder::new()
                 .menu(&menu)
                 .tooltip(format!("stfu {} — hold {} to dictate", env!("CARGO_PKG_VERSION"), config.hotkey.join("+")))
-                .on_menu_event(|app, event| match event.id.as_ref() {
+                .on_menu_event(move |app, event| match event.id.as_ref() {
                     "quit" => app.exit(0),
                     "settings" => show_settings(app),
                     "update" => updater::check_now(app.clone()),
+                    "autostart" => {
+                        use tauri_plugin_autostart::ManagerExt;
+                        let enable = autostart_item.is_checked().unwrap_or(true);
+                        let auto = app.autolaunch();
+                        let result = if enable { auto.enable() } else { auto.disable() };
+                        match result {
+                            Ok(()) => {
+                                log::info!("launch at login set to {enable}");
+                                let mut cfg = shared_for_tray.write().unwrap();
+                                cfg.launch_at_login = enable;
+                                if let Err(e) = cfg.save() {
+                                    log::warn!("could not save config: {e:#}");
+                                }
+                            }
+                            Err(e) => {
+                                log::error!("could not change launch at login: {e}");
+                                let _ = autostart_item.set_checked(!enable);
+                            }
+                        }
+                    }
                     _ => {}
                 });
             #[cfg(target_os = "macos")]
