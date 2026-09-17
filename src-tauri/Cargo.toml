@@ -1,6 +1,6 @@
 [package]
 name = "stfu"
-version = "0.5.1"
+version = "0.5.2"
 description = "Hold a key, talk, get clean text pasted where your cursor is."
 edition = "2021"
 

@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 interface SttConfig { base_url: string; model: string; api_key: string; language: string }
 interface LlmConfig { enabled: boolean; base_url: string; model: string; api_key: string; timeout_secs: number }
-interface Config { hotkey: string[]; stt: SttConfig; llm: LlmConfig }
+interface Config { hotkey: string[]; stt: SttConfig; llm: LlmConfig; launch_at_login: boolean; auto_update: boolean }
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -116,6 +116,8 @@ async function connectOpenCode() {
 function collect(): Config {
   return {
     hotkey: cfg.hotkey,
+    launch_at_login: cfg.launch_at_login,
+    auto_update: $<HTMLInputElement>("auto-update").checked,
     stt: {
       base_url: $<HTMLInputElement>("stt-url").value.trim(),
       model: $<HTMLInputElement>("stt-model").value.trim(),
@@ -195,6 +197,8 @@ async function load() {
   $<HTMLInputElement>("llm-model").value = cfg.llm.model;
 
   void renderPermissions();
+  $<HTMLInputElement>("auto-update").checked = cfg.auto_update ?? true;
+  $("app-version").textContent = `version ${await invoke<string>("app_version")}`;
   if (!cfg.stt.api_key) setStatus("stt-status", "No key yet. Click “Get a key”, paste it here, then Test.");
   if (!cfg.llm.api_key && cfg.llm.enabled) setStatus("llm-status", "No key yet. Click “Get a key”, paste it here, then Test.");
 }
@@ -229,6 +233,18 @@ async function save() {
 }
 
 $("perm-recheck").addEventListener("click", () => void renderPermissions());
+$("check-updates").addEventListener("click", async () => {
+  const btn = $<HTMLButtonElement>("check-updates");
+  btn.disabled = true;
+  setStatus("update-status", "Checking…");
+  try {
+    setStatus("update-status", await invoke<string>("check_for_updates"), "ok");
+  } catch (e) {
+    setStatus("update-status", String(e), "err");
+  } finally {
+    btn.disabled = false;
+  }
+});
 $("stt-provider").addEventListener("change", (e) => applySttProvider((e.target as HTMLSelectElement).value));
 $("zen-connect-btn").addEventListener("click", () => void connectOpenCode());
 $("zen-refresh").addEventListener("click", () => void loadZenModels());

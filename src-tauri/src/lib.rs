@@ -147,6 +147,8 @@ pub fn run() {
             commands::permission_status,
             commands::request_permission,
             commands::open_pane,
+            commands::app_version,
+            commands::check_for_updates,
             commands::zen_models,
             commands::import_opencode_key,
         ])

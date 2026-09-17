@@ -12,6 +12,9 @@ pub struct Config {
     /// Start with the OS session so dictation is always available. Toggle from the tray menu.
     #[serde(default = "default_true")]
     pub launch_at_login: bool,
+    /// Check GitHub for a newer release in the background and install it.
+    #[serde(default = "default_true")]
+    pub auto_update: bool,
 }
 
 fn default_true() -> bool {
@@ -85,6 +88,7 @@ impl Default for Config {
                 wire: None,
             },
             launch_at_login: true,
+            auto_update: true,
         }
     }
 }

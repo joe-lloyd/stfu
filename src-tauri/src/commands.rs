@@ -252,26 +252,52 @@ pub fn request_permission(key: String) -> Result<(), String> {
 #[tauri::command]
 pub fn open_pane(key: &str) -> Result<(), String> {
     #[cfg(target_os = "macos")]
-    let url = match key {
-        "microphone" => "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
-        "accessibility" => "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
-        "input_monitoring" => "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent",
-        other => return Err(format!("unknown settings pane: {other}")),
-    };
+    {
+        let url = match key {
+            "microphone" => "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
+            "accessibility" => "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+            "input_monitoring" => "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent",
+            other => return Err(format!("unknown settings pane: {other}")),
+        };
+        std::process::Command::new("open")
+            .arg(url)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
     #[cfg(target_os = "windows")]
-    let url = match key {
-        "microphone" => "ms-settings:privacy-microphone",
-        other => return Err(format!("unknown settings pane: {other}")),
-    };
+    {
+        let url = match key {
+            "microphone" => "ms-settings:privacy-microphone",
+            other => return Err(format!("unknown settings pane: {other}")),
+        };
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
     #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
-    let url = {
+    {
+        // No per-permission settings pane to open on Linux.
         let _ = key;
-        return Ok(());
-    };
+        Ok(())
+    }
+}
 
-    #[cfg(target_os = "macos")]
-    let spawned = std::process::Command::new("open").arg(url).spawn();
-    #[cfg(target_os = "windows")]
-    let spawned = std::process::Command::new("cmd").args(["/C", "start", "", url]).spawn();
-    spawned.map(|_| ()).map_err(|e| e.to_string())
+/// Version of the running app, shown in Settings next to the update button.
+#[tauri::command]
+pub fn app_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
+/// Check GitHub for a newer release. Returns a message for the UI. When an update exists it is
+/// downloaded and installed, and the app restarts, so this call does not return normally.
+#[tauri::command]
+pub async fn check_for_updates(app: tauri::AppHandle) -> Result<String, String> {
+    match crate::updater::check_and_install(&app).await {
+        Ok(Some(version)) => Ok(format!("Updating to {version}. stfu will restart.")),
+        Ok(None) => Ok(format!("Up to date (version {}).", env!("CARGO_PKG_VERSION"))),
+        Err(e) => Err(format!("{e:#}")),
+    }
 }

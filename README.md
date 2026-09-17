@@ -39,7 +39,7 @@ On by default: the app registers itself to start with your session (a LaunchAgen
 
 ## Auto-update
 
-The app checks GitHub Releases about 20 seconds after launch and every six hours after that (also on demand from the tray menu), verifies the download against the minisign public key in `tauri.conf.json`, installs, and restarts itself. Releases are signed with the same `stfu Dev Signing` certificate every time, so on macOS the Accessibility, Input Monitoring and Microphone grants survive updates.
+The app checks GitHub Releases about 20 seconds after launch and every six hours after that, verifies the download against the minisign public key in `tauri.conf.json`, installs, and restarts itself. Settings has an **Updates** section showing the running version, a **Check for updates now** button, and a toggle for the background checks (on by default, stored as `auto_update`). The tray menu has the same manual check. Releases are signed with the same `stfu Dev Signing` certificate every time, so on macOS the Accessibility, Input Monitoring and Microphone grants survive updates.
 
 Secrets that make this work live in the GitHub repo (`APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`). The originals are on Joe's Mac in `~/.stfu-signing/` and `~/.tauri/`. **Back those up**: losing the updater private key means existing installs can never update again, and losing the certificate means one more round of permission prompts.
 
