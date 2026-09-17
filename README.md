@@ -65,9 +65,11 @@ pnpm tauri build        # produce .app/.dmg (macOS) or .msi/.exe (Windows)
 
 ### Dictation languages
 
-Whisper auto-detects the language by default, which is the right setting if you switch languages during the day. To pin one, use the tray menu's **Language** submenu (instant, no Settings window) or the dropdown in Settings. Twenty languages are listed, including Dutch, and any other ISO-639-1 code can be set as `stt.language` in the config.
+The default is **English**. Switch from the tray menu's **Language** submenu (instant, no Settings window) or the dropdown in Settings. Twenty languages are listed, including Dutch, plus Auto-detect; any other ISO-639-1 code works as `stt.language` in the config.
 
-Pinning is a hint, not a translation instruction: with Dutch pinned, an English sentence still comes out in English. That wording is deliberate and measured, because telling the model to "write in Dutch" makes it translate the odd English dictation.
+The chosen language does two things. It is passed to the transcriber as a hint, and it loads that language's own clean-up rules into the system prompt: which words are fillers, how days and months are capitalised, and a worked example in that language. Dutch, for instance, lower-cases `maandag`, capitalises both letters of `IJmuiden`, and keeps English loanwords like "de build" and "deployen" untranslated.
+
+Selecting a language never causes translation. With Dutch selected, an English sentence still comes out in English. That is deliberate: telling a model to "write the output in Dutch" makes it translate the occasional English dictation, which was measured and rejected.
 
 ### OpenCode as the clean-up provider
 

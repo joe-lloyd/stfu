@@ -98,10 +98,13 @@ pub async fn cleanup(client: &reqwest::Client, cfg: &Config, transcript: &str) -
         .llm_key()
         .context("no LLM API key: set llm.api_key in config.json or STFU_LLM_API_KEY")?;
     let base = cfg.llm.base_url.trim_end_matches('/');
-    // A pinned language is a hint, not an instruction to translate: someone who pins Dutch still
-    // dictates the odd English sentence, and "write it in Dutch" makes models translate that.
-    // Measured: the wording below keeps English as English and Dutch as Dutch.
-    let user = match crate::lang::english_name(cfg.stt.language.trim()) {
+    // The system prompt carries the language's own conventions (fillers, capitalisation, an
+    // example in that language). A pinned language is still only a hint about what to expect, not
+    // an instruction to translate: someone who pins Dutch still dictates the odd English sentence,
+    // and "write it in Dutch" makes models translate that. Measured against the live model.
+    let language = cfg.stt.language.trim();
+    let system = format!("{SYSTEM_PROMPT}{}", crate::lang::cleanup_hint(language));
+    let user = match crate::lang::english_name(language) {
         Some(name) => format!(
             "The speaker usually dictates in {name}. Write \"cleaned\" in the same language as the \
              transcript itself; never translate.\nTranscript: \"\"\"{transcript}\"\"\""
@@ -117,7 +120,7 @@ pub async fn cleanup(client: &reqwest::Client, cfg: &Config, transcript: &str) -
             let mut body = json!({
                 "model": cfg.llm.model, "temperature": 0.2,
                 "response_format": {"type": "json_object"},
-                "messages": [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": user}],
+                "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
             });
             let mut reply = send(client, client.post(&url).bearer_auth(&key), &body, timeout).await?;
             if reply.is_err_400() {
@@ -133,7 +136,7 @@ pub async fn cleanup(client: &reqwest::Client, cfg: &Config, transcript: &str) -
             let url = format!("{base}/responses");
             let body = json!({
                 "model": cfg.llm.model, "temperature": 0.2,
-                "instructions": SYSTEM_PROMPT, "input": user,
+                "instructions": system, "input": user,
                 "text": {"format": {"type": "json_object"}},
             });
             let text = send(client, client.post(&url).bearer_auth(&key), &body, timeout).await?.into_result()?;
@@ -157,7 +160,7 @@ pub async fn cleanup(client: &reqwest::Client, cfg: &Config, transcript: &str) -
             let url = format!("{base}/messages");
             let body = json!({
                 "model": cfg.llm.model, "max_tokens": 2048, "temperature": 0.2,
-                "system": SYSTEM_PROMPT,
+                "system": system,
                 "messages": [{"role": "user", "content": user}],
             });
             let req = client.post(&url).header("x-api-key", &key).header("anthropic-version", "2023-06-01");
@@ -171,7 +174,7 @@ pub async fn cleanup(client: &reqwest::Client, cfg: &Config, transcript: &str) -
         Wire::Gemini => {
             let url = format!("{base}/models/{}:generateContent", cfg.llm.model);
             let body = json!({
-                "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+                "systemInstruction": {"parts": [{"text": &system}]},
                 "contents": [{"role": "user", "parts": [{"text": user}]}],
                 "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"},
             });

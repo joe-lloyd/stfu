@@ -26,8 +26,8 @@ pub struct SttConfig {
     /// Leave empty to read from the STFU_STT_API_KEY environment variable.
     #[serde(default)]
     pub api_key: String,
-    /// ISO-639-1 code (e.g. "en"); empty = let the model detect.
-    #[serde(default)]
+    /// ISO-639-1 code (e.g. "en"); empty = let the model detect. Defaults to English.
+    #[serde(default = "default_language")]
     pub language: String,
 }
 
@@ -54,6 +54,12 @@ fn default_timeout() -> u64 {
     8
 }
 
+/// English rather than auto-detect: auto-detect misreads short or accented utterances often
+/// enough to be annoying, and most people dictate in one language most of the time.
+fn default_language() -> String {
+    "en".to_string()
+}
+
 impl Default for Config {
     fn default() -> Self {
         let hotkey = if cfg!(target_os = "macos") {
@@ -67,7 +73,7 @@ impl Default for Config {
                 base_url: "https://api.groq.com/openai/v1".into(),
                 model: "whisper-large-v3-turbo".into(),
                 api_key: String::new(),
-                language: String::new(),
+                language: default_language(),
             },
             llm: LlmConfig {
                 enabled: true,
