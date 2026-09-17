@@ -43,12 +43,27 @@ fn pill(app: &AppHandle) -> Option<WebviewWindow> {
     app.get_webview_window(PILL)
 }
 
+/// Brings Settings to the front. A menu-bar app runs with the Accessory activation policy, and
+/// an accessory app cannot raise a window above other apps: on a first run the window would open
+/// behind everything and the user would see nothing happen. So switch to Regular while the window
+/// is up (it gains a Dock icon for that time) and back to Accessory when it closes.
 fn show_settings(app: &AppHandle) {
+    #[cfg(target_os = "macos")]
+    let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
     if let Some(win) = app.get_webview_window(SETTINGS) {
         let _ = win.show();
         let _ = win.unminimize();
         let _ = win.set_focus();
     }
+}
+
+/// Back to a pure menu-bar app once Settings is out of the way.
+fn hide_settings(app: &AppHandle) {
+    if let Some(win) = app.get_webview_window(SETTINGS) {
+        let _ = win.hide();
+    }
+    #[cfg(target_os = "macos")]
+    let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 }
 
 /// Bottom-centre of the primary monitor, a little above the dock/taskbar.
@@ -140,7 +155,7 @@ pub fn run() {
             if window.label() == SETTINGS {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                     api.prevent_close();
-                    let _ = window.hide();
+                    hide_settings(&window.app_handle().clone());
                 }
             }
         })
