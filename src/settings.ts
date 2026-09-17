@@ -14,6 +14,7 @@ const STT_PRESETS: Record<string, { url: string; model: string; keyUrl: string }
 
 interface ZenModel { id: string; free: boolean; wire: string }
 interface Language { code: string; label: string }
+interface Permission { key: string; label: string; granted: boolean; detail: string; can_prompt: boolean }
 
 const LLM_PRESETS: Record<string, { url: string; models: string[]; keyUrl: string; hint: string }> = {
   zen: {
@@ -131,6 +132,41 @@ function collect(): Config {
   };
 }
 
+let permTimer: number | undefined;
+
+async function renderPermissions() {
+  const perms = await invoke<Permission[]>("permission_status");
+  const list = $("perm-list");
+  list.innerHTML = perms
+    .map(
+      (p) => `<div class="perm ${p.granted ? "ok" : ""}" data-key="${p.key}">
+        <span class="dot"></span>
+        <span class="name">${p.label}</span>
+        <span class="why">${p.granted ? "Granted" : p.detail}</span>
+        <button data-grant="${p.key}">${p.can_prompt ? "Grant" : "Open Settings"}</button>
+      </div>`,
+    )
+    .join("");
+  list.querySelectorAll<HTMLButtonElement>("button[data-grant]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      try {
+        await invoke("request_permission", { key: btn.dataset.grant });
+      } finally {
+        btn.disabled = false;
+        setTimeout(() => void renderPermissions(), 800);
+      }
+    });
+  });
+  const missing = perms.filter((p) => !p.granted);
+  $("perm-note").textContent = missing.length
+    ? "macOS only asks once, so use the buttons above: they open the right settings page. After switching one on, quit stfu from the menu bar and open it again — macOS only applies a new permission to a freshly started app (stfu restarts itself for Accessibility)."
+    : "All set. Hold the hotkey anywhere and talk.";
+  // Keep the panel honest while the user is away granting things in System Settings.
+  if (permTimer) clearInterval(permTimer);
+  if (missing.length) permTimer = window.setInterval(() => void renderPermissions(), 2500);
+}
+
 async function load() {
   cfg = await invoke<Config>("get_config");
   const languages = await invoke<Language[]>("languages");
@@ -158,6 +194,7 @@ async function load() {
   applyLlmProvider(llmP);
   $<HTMLInputElement>("llm-model").value = cfg.llm.model;
 
+  void renderPermissions();
   if (!cfg.stt.api_key) setStatus("stt-status", "No key yet. Click “Get a key”, paste it here, then Test.");
   if (!cfg.llm.api_key && cfg.llm.enabled) setStatus("llm-status", "No key yet. Click “Get a key”, paste it here, then Test.");
 }
@@ -191,6 +228,7 @@ async function save() {
   }
 }
 
+$("perm-recheck").addEventListener("click", () => void renderPermissions());
 $("stt-provider").addEventListener("change", (e) => applySttProvider((e.target as HTMLSelectElement).value));
 $("zen-connect-btn").addEventListener("click", () => void connectOpenCode());
 $("zen-refresh").addEventListener("click", () => void loadZenModels());

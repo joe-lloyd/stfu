@@ -22,6 +22,14 @@
       button.primary { background: #7dd3fc; color: #0b1620; border-color: #7dd3fc; font-weight: 600; }
       button.primary:hover { background: #93dcfd; }
       button.link { background: transparent; border-color: transparent; color: #7dd3fc; padding: 0; }
+      .perm { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid #2a2a32; }
+      .perm:last-child { border-bottom: 0; }
+      .perm .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; background: #ff6b6b; }
+      .perm.ok .dot { background: #3ddc84; }
+      .perm .name { font-weight: 600; flex: none; width: 128px; }
+      .perm .why { color: #9a9aa5; font-size: 11px; flex: 1; }
+      .perm button { flex: none; }
+      .perm.ok button { display: none; }
       button:disabled { opacity: 0.5; cursor: default; }
       .status { min-height: 18px; font-size: 12px; margin-top: 8px; color: #9a9aa5; }
       .status.ok { color: #3ddc84; }
@@ -36,10 +44,16 @@
   <body>
     <main>
       <h1>stfu</h1>
-      <p class="sub">Hold <code id="hotkey">Fn</code>, talk, release. Two keys are needed, both take a minute to get.</p>
+      <p class="sub">Hold <code id="hotkey">Fn</code>, talk, release. Three short steps below; each is a minute's work.</p>
+
+      <section id="perm-section">
+        <h2>1. Permissions <button class="link" id="perm-recheck">Recheck</button></h2>
+        <div id="perm-list"></div>
+        <div class="hint" id="perm-note"></div>
+      </section>
 
       <section>
-        <h2>1. Speech to text <button class="link" id="stt-getkey">Get a key ↗</button></h2>
+        <h2>2. Speech to text <button class="link" id="stt-getkey">Get a key ↗</button></h2>
         <label>Provider</label>
         <select id="stt-provider">
           <option value="groq">Groq · whisper-large-v3-turbo (fast, cheap)</option>
@@ -65,7 +79,7 @@
       </section>
 
       <section>
-        <h2>2. Clean-up model <button class="link" id="llm-getkey">Get a key ↗</button></h2>
+        <h2>3. Clean-up model <button class="link" id="llm-getkey">Get a key ↗</button></h2>
         <label class="toggle"><input type="checkbox" id="llm-enabled" /> Clean up the transcript with an LLM (remove ums, fix punctuation, bullet lists)</label>
         <label>Provider</label>
         <select id="llm-provider">

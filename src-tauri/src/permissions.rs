@@ -9,6 +9,35 @@ use objc2_foundation::NSString;
 #[link(name = "AVFoundation", kind = "framework")]
 extern "C" {}
 
+#[link(name = "IOKit", kind = "framework")]
+extern "C" {
+    /// 0 = granted, 1 = denied, 2 = not yet asked.
+    fn IOHIDCheckAccess(request_type: u32) -> u32;
+    fn IOHIDRequestAccess(request_type: u32) -> bool;
+}
+
+/// `kIOHIDRequestTypeListenEvent`: observing keystrokes, which is what the hotkey listener does.
+const LISTEN_EVENT: u32 = 1;
+
+/// Input Monitoring, the permission a global hotkey needs. Separate from Accessibility: without
+/// it the event tap is created but macOS delivers nothing, so the hotkey silently does nothing.
+pub fn input_monitoring_granted() -> bool {
+    unsafe { IOHIDCheckAccess(LISTEN_EVENT) == 0 }
+}
+
+/// Shows the system's Input Monitoring prompt when it has never been asked. macOS only prompts
+/// once ever, so a user who dismissed it must be sent to System Settings instead.
+pub fn request_input_monitoring() -> bool {
+    unsafe { IOHIDRequestAccess(LISTEN_EVENT) }
+}
+
+/// Microphone, without re-prompting.
+pub fn microphone_granted() -> bool {
+    let media = NSString::from_str("soun");
+    let status: isize = unsafe { msg_send![class!(AVCaptureDevice), authorizationStatusForMediaType: &*media] };
+    status == 3
+}
+
 use core_foundation::base::TCFType;
 use core_foundation::boolean::CFBoolean;
 use core_foundation::dictionary::{CFDictionary, CFDictionaryRef};

@@ -152,3 +152,126 @@ pub fn import_opencode_key() -> Result<String, String> {
     }
     Err("No OpenCode Zen credentials found. Run `opencode auth login`, pick OpenCode Zen, or paste a key from opencode.ai/zen.".into())
 }
+
+#[derive(serde::Serialize)]
+pub struct Permission {
+    /// Stable key used by the UI and by `request_permission`.
+    pub key: String,
+    pub label: String,
+    pub granted: bool,
+    /// Why the app needs it, in the user's terms.
+    pub detail: String,
+    /// True while the OS is still willing to show its own prompt.
+    pub can_prompt: bool,
+}
+
+/// Every OS permission the app needs, with its current state. Platform-specific: macOS gates
+/// microphone, accessibility and input monitoring; Windows only really gates the microphone.
+#[tauri::command]
+pub fn permission_status() -> Vec<Permission> {
+    #[cfg(target_os = "macos")]
+    {
+        use crate::permissions as p;
+        let mic = p::microphone_granted();
+        let ax = p::accessibility_trusted();
+        let im = p::input_monitoring_granted();
+        vec![
+            Permission {
+                key: "microphone".into(),
+                label: "Microphone".into(),
+                granted: mic,
+                detail: "Records your voice while the hotkey is held. Without it macOS hands the app silence instead of an error.".into(),
+                can_prompt: !mic,
+            },
+            Permission {
+                key: "input_monitoring".into(),
+                label: "Input Monitoring".into(),
+                granted: im,
+                detail: "Lets the app notice the hotkey being held anywhere. Without it the hotkey does nothing at all.".into(),
+                can_prompt: !im,
+            },
+            Permission {
+                key: "accessibility".into(),
+                label: "Accessibility".into(),
+                granted: ax,
+                detail: "Pastes the finished text into whatever app you are typing in. The app restarts itself once you grant this.".into(),
+                can_prompt: !ax,
+            },
+        ]
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let mic = crate::audio::input_device_available();
+        vec![Permission {
+            key: "microphone".into(),
+            label: "Microphone".into(),
+            granted: mic,
+            detail: "Records your voice while the hotkey is held. If this is red, allow desktop apps to use the microphone in Windows privacy settings.".into(),
+            can_prompt: false,
+        }]
+    }
+}
+
+/// Ask the OS to show its own prompt for a permission, or open the relevant settings pane when
+/// the OS will no longer prompt (macOS only ever asks once).
+#[tauri::command]
+pub fn request_permission(key: String) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        use crate::permissions as p;
+        match key.as_str() {
+            "microphone" => {
+                if p::microphone_granted() {
+                    return Ok(());
+                }
+                p::request_microphone(|granted| log::info!("microphone prompt result: {granted}"));
+                open_pane("microphone")
+            }
+            "input_monitoring" => {
+                if !p::request_input_monitoring() {
+                    open_pane("input_monitoring")?;
+                }
+                Ok(())
+            }
+            "accessibility" => {
+                p::request_accessibility();
+                open_pane("accessibility")
+            }
+            other => Err(format!("unknown permission: {other}")),
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = key;
+        open_pane("microphone")
+    }
+}
+
+/// Opens the OS settings page for a permission. Kept separate from `open_url` so the app never
+/// opens an arbitrary non-http scheme on request from the webview.
+#[tauri::command]
+pub fn open_pane(key: &str) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let url = match key {
+        "microphone" => "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
+        "accessibility" => "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+        "input_monitoring" => "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent",
+        other => return Err(format!("unknown settings pane: {other}")),
+    };
+    #[cfg(target_os = "windows")]
+    let url = match key {
+        "microphone" => "ms-settings:privacy-microphone",
+        other => return Err(format!("unknown settings pane: {other}")),
+    };
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    let url = {
+        let _ = key;
+        return Ok(());
+    };
+
+    #[cfg(target_os = "macos")]
+    let spawned = std::process::Command::new("open").arg(url).spawn();
+    #[cfg(target_os = "windows")]
+    let spawned = std::process::Command::new("cmd").args(["/C", "start", "", url]).spawn();
+    spawned.map(|_| ()).map_err(|e| e.to_string())
+}

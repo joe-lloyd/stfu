@@ -129,6 +129,9 @@ pub fn run() {
             commands::test_llm,
             commands::open_url,
             commands::languages,
+            commands::permission_status,
+            commands::request_permission,
+            commands::open_pane,
             commands::zen_models,
             commands::import_opencode_key,
         ])
@@ -257,42 +260,57 @@ pub fn run() {
             // Background auto-update: first check shortly after launch, then every few hours.
             updater::start(app.handle().clone());
 
+            // macOS applies a new Accessibility or Input Monitoring grant only to a freshly
+            // started process, so watch for either landing and restart ourselves. Without this the
+            // user grants the permission, nothing changes, and the app looks broken.
             #[cfg(target_os = "macos")]
             {
-                let trusted = permissions::accessibility_trusted();
-                log::info!("accessibility trusted: {trusted}");
-                if !trusted {
-                    log::warn!("requesting Accessibility permission; will restart once granted");
+                let ax = permissions::accessibility_trusted();
+                let im = permissions::input_monitoring_granted();
+                log::info!("accessibility trusted: {ax} | input monitoring granted: {im}");
+                if !ax {
+                    log::warn!("requesting Accessibility; will restart once granted");
                     permissions::request_accessibility();
-                    // macOS only applies a new Accessibility grant to a fresh process, and until
-                    // then synthetic keystrokes are dropped. Poll and restart ourselves when it lands.
+                }
+                if !ax || !im {
                     let handle = app.handle().clone();
                     std::thread::spawn(move || loop {
                         std::thread::sleep(Duration::from_secs(2));
-                        if permissions::accessibility_trusted() {
-                            log::info!("Accessibility granted; restarting to apply it");
+                        if permissions::accessibility_trusted() != ax
+                            || permissions::input_monitoring_granted() != im
+                        {
+                            log::info!("a permission changed; restarting to apply it");
                             handle.restart();
                         }
                     });
                 }
             }
 
-            // Ask macOS for microphone access explicitly. CoreAudio alone does not trigger the
-            // system prompt, and without a grant macOS silently delivers all-zero audio.
+            // Input Monitoring is what makes the hotkey visible to the app. macOS shows its own
+            // prompt the first time an event tap is created, but only once ever: someone who
+            // misses it is left with a hotkey that silently does nothing, so ask explicitly and
+            // surface the state in Settings.
             #[cfg(target_os = "macos")]
-            permissions::request_microphone(|granted| {
-                if granted {
-                    log::info!("microphone access granted");
-                } else {
-                    log::error!("microphone access denied: enable stfu under System Settings > Privacy & Security > Microphone");
-                    let _ = std::process::Command::new("open")
-                        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
-                        .spawn();
+            let input_monitoring = {
+                let granted = permissions::input_monitoring_granted();
+                if !granted {
+                    log::warn!("requesting Input Monitoring; without it the hotkey cannot work");
+                    permissions::request_input_monitoring();
                 }
-            });
+                granted
+            };
+            #[cfg(not(target_os = "macos"))]
+            let input_monitoring = true;
 
-            // First run or missing keys: open settings straight away.
-            if config.needs_setup() {
+            // First run, missing keys or missing permissions: open Settings so the user can see
+            // exactly what is still needed instead of pressing the hotkey and getting nothing.
+            #[cfg(target_os = "macos")]
+            let permissions_ok = input_monitoring
+                && permissions::accessibility_trusted()
+                && permissions::microphone_granted();
+            #[cfg(not(target_os = "macos"))]
+            let permissions_ok = input_monitoring;
+            if config.needs_setup() || !permissions_ok {
                 show_settings(&app.handle().clone());
             }
 

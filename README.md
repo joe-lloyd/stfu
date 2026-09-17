@@ -105,7 +105,15 @@ Set `llm.enabled` to `false` to paste the raw transcript with no cleanup. Any Op
 
 ### macOS permissions
 
-The app needs three permissions and asks for each on startup: **Microphone**, **Accessibility** (sending the paste keystroke to other apps) and **Input Monitoring** (the global key listener). Allow each prompt. Accessibility only applies to a fresh process, so the app restarts itself once you grant it.
+The app needs three, and **Settings shows a live panel with all three and a button each**. It opens by itself whenever something is missing.
+
+| Permission | What it does | If missing |
+|---|---|---|
+| Microphone | Hears you | macOS hands the app silence, so nothing is transcribed |
+| Input Monitoring | Notices the hotkey being held | The hotkey does nothing at all, with no error |
+| Accessibility | Pastes the text into the app you are in | Text is transcribed but never appears |
+
+macOS only ever prompts once per permission. If a prompt is missed there is no second chance, which is why the panel exists: its buttons open the exact System Settings page. Accessibility and Input Monitoring only apply to a freshly started process, so the app restarts itself as soon as either is granted.
 
 Run the built `stfu.app` (from `pnpm tauri build --debug --bundles app`, or `open src-tauri/target/debug/bundle/macos/stfu.app`) rather than `pnpm tauri dev` when testing permissions: in dev mode macOS attributes them to the terminal that launched the process, and a missing microphone grant shows up as silence rather than an error.
 
@@ -117,7 +125,10 @@ The default macOS hotkey is `Fn`. macOS binds `Fn` to dictation or emoji by defa
 
 ### Windows
 
-Default hotkey is Ctrl+Win (`["ControlLeft", "MetaLeft"]`). No permission dialogs. The keyboard hook cannot see elevated (admin) windows, so dictation into an admin PowerShell will not work unless stfu also runs elevated.
+Default hotkey is Ctrl+Win (`["ControlLeft", "MetaLeft"]`). There are no permission dialogs, but two things catch people out:
+
+- **The tray icon is hidden by default.** Click the `^` arrow next to the clock and drag the waveform icon onto the taskbar.
+- **Microphone privacy.** If nothing is recorded, allow desktop apps to use the microphone under Settings > Privacy & security > Microphone. Settings shows a Microphone row that goes red when the device cannot be opened. The keyboard hook cannot see elevated (admin) windows, so dictation into an admin PowerShell will not work unless stfu also runs elevated.
 
 ## Behaviour details
 
@@ -125,6 +136,21 @@ Default hotkey is Ctrl+Win (`["ControlLeft", "MetaLeft"]`). No permission dialog
 - The clipboard is restored to its previous text ~250 ms after pasting.
 - If the LLM call fails or times out, the raw transcript is pasted so you never lose a dictation.
 - Errors show in the pill for 2.5 s and in the log (`RUST_LOG=info`).
+
+## If it is not working
+
+Open Settings from the tray icon. The Permissions panel at the top is the answer to almost every "it does nothing" report; a red row names the problem and its button opens the right page.
+
+Beyond that:
+
+| Symptom | Cause |
+|---|---|
+| Hotkey does nothing, no pill appears | Input Monitoring missing, or another dictation app (Wispr Flow, macOS dictation on Fn) is grabbing the same key |
+| Pill appears but the wave is flat | Microphone missing or the wrong input device is selected in the OS |
+| Text is transcribed but nothing is pasted | Accessibility missing, or the target app refuses synthetic paste |
+| "no speech-to-text API key" | No key saved yet; add one in Settings and press Test |
+
+The log is at `~/Library/Application Support/stfu/stfu.log` on macOS and `%APPDATA%\stfu\stfu.log` on Windows. It records each permission's state at startup.
 
 ## Known limitations (MVP)
 

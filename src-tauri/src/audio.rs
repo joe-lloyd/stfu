@@ -162,6 +162,16 @@ fn push(
     }
 }
 
+/// Whether a usable input device exists. On Windows a blocked microphone privacy setting shows up
+/// here, since the device cannot be opened for capture.
+pub fn input_device_available() -> bool {
+    let host = cpal::default_host();
+    match host.default_input_device() {
+        Some(d) => d.default_input_config().is_ok(),
+        None => false,
+    }
+}
+
 /// A WAV of near-silence, used to validate speech-to-text credentials without a microphone.
 pub fn silent_wav(seconds: f32) -> Result<Vec<u8>> {
     let n = (TARGET_RATE as f32 * seconds) as usize;

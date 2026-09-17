@@ -12,8 +12,9 @@ REPO="joe-lloyd/stfu"
 API="https://api.github.com/repos/$REPO/releases"
 if [ -n "${STFU_VERSION:-}" ]; then API="$API/tags/$STFU_VERSION"; else API="$API/latest"; fi
 
-say() { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
-die() { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
+say()  { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
+warn() { printf '\033[1;33mnote:\033[0m %s\n' "$*"; }
+die()  { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 
 fetch() { # fetch URL [outfile]
   if command -v curl >/dev/null 2>&1; then
@@ -31,46 +32,75 @@ asset_url() { # asset_url <suffix-or-substring>
 }
 
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+cleanup() { [ -n "${MOUNT:-}" ] && hdiutil detach "$MOUNT" -quiet 2>/dev/null; rm -rf "$TMP"; }
+trap cleanup EXIT
 
 case "$(uname -s)" in
   Darwin)
-    say "Finding latest macOS build"
+    MAJOR="$(sw_vers -productVersion | cut -d. -f1)"
+    [ "$MAJOR" -ge 12 ] 2>/dev/null || die "stfu needs macOS 12 or newer (found $(sw_vers -productVersion))"
+
+    say "Finding the latest macOS build"
     URL="$(asset_url .dmg)"; [ -n "$URL" ] || die "no .dmg asset in the release"
     say "Downloading $(basename "$URL")"
     fetch "$URL" "$TMP/stfu.dmg"
-    say "Mounting"
-    MOUNT="$(hdiutil attach -nobrowse -readonly -mountrandom "$TMP" "$TMP/stfu.dmg" | awk -F'\t' '/\/Volumes|\/private|\/var/ {print $NF}' | tail -n 1)"
-    [ -d "$MOUNT" ] || die "could not mount the disk image"
+
+    say "Mounting the disk image"
+    MOUNT="$(hdiutil attach -nobrowse -readonly -mountrandom "$TMP" "$TMP/stfu.dmg" \
+             | awk -F'\t' '/\/Volumes|\/private|\/var|\/tmp/ {print $NF}' | tail -n 1)"
+    [ -n "$MOUNT" ] && [ -d "$MOUNT" ] || die "could not mount the disk image"
     APP="$(find "$MOUNT" -maxdepth 1 -name '*.app' | head -n 1)"
-    [ -n "$APP" ] || { hdiutil detach "$MOUNT" -quiet || true; die "no .app inside the disk image"; }
-    say "Installing to /Applications (quitting any running copy)"
+    [ -n "$APP" ] || die "no .app inside the disk image"
+
+    say "Installing to /Applications"
+    osascript -e 'quit app "stfu"' 2>/dev/null || true
     pkill -x stfu 2>/dev/null || true
+    sleep 1
     rm -rf "/Applications/stfu.app"
-    cp -R "$APP" /Applications/
-    hdiutil detach "$MOUNT" -quiet || true
-    say "Removing download quarantine so Gatekeeper lets it open"
+    cp -R "$APP" /Applications/ || die "could not write to /Applications (is it locked down?)"
+
+    say "Clearing the download quarantine so Gatekeeper lets it open"
     xattr -dr com.apple.quarantine /Applications/stfu.app 2>/dev/null || true
-    say "Launching"
-    open /Applications/stfu.app
+
+    # A broken signature is the one failure that would silently stop macOS remembering the
+    # permissions you are about to grant, so check rather than assume.
+    if ! codesign --verify --deep --strict /Applications/stfu.app 2>/dev/null; then
+      warn "the app's code signature did not verify; permissions may not stick. Reinstalling usually fixes it."
+    fi
+
+    say "Starting stfu"
+    open /Applications/stfu.app || die "the app would not start"
+    sleep 3
+    pgrep -x stfu >/dev/null 2>&1 || warn "stfu does not appear to be running; open it from /Applications and watch for an error."
+
     cat <<'MSG'
 
-Installed /Applications/stfu.app.
+Installed. stfu lives in the menu bar (the small waveform icon), not the Dock.
 
-First launch asks for three permissions: Microphone, Accessibility and Input Monitoring.
-Allow each; the app restarts itself once Accessibility is granted. Then hold Fn anywhere and talk.
-Settings (providers and API keys) live in the menu bar icon.
+Its Settings window opens by itself and lists three macOS permissions with a button each:
+
+  Microphone         hears you
+  Input Monitoring   notices the hotkey
+  Accessibility      pastes the text into whatever app you are in
+
+macOS only ever asks once per permission, so if you miss a prompt use those buttons: they open
+the right page in System Settings. The panel turns green as each one lands, and stfu restarts
+itself so the change takes effect.
+
+Then add an API key for speech to text (console.groq.com is free and fast), hold the Fn key
+anywhere, and talk.
+
 MSG
     ;;
   Linux)
-    say "Finding latest Linux build"
+    say "Finding the latest Linux build"
     URL="$(asset_url .AppImage)"; [ -n "$URL" ] || die "no .AppImage asset in the release"
     DEST="${XDG_BIN_HOME:-$HOME/.local/bin}"
     mkdir -p "$DEST"
     say "Downloading $(basename "$URL") to $DEST/stfu"
     fetch "$URL" "$DEST/stfu"
     chmod +x "$DEST/stfu"
-    case ":$PATH:" in *":$DEST:"*) ;; *) printf 'note: %s is not on your PATH\n' "$DEST" ;; esac
+    case ":$PATH:" in *":$DEST:"*) ;; *) warn "$DEST is not on your PATH" ;; esac
     cat <<MSG
 
 Installed $DEST/stfu. Run it with: stfu
