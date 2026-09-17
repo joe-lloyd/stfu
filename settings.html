@@ -66,9 +66,9 @@
         <label class="toggle"><input type="checkbox" id="llm-enabled" /> Clean up the transcript with an LLM (remove ums, fix punctuation, bullet lists)</label>
         <label>Provider</label>
         <select id="llm-provider">
-          <option value="zen">OpenCode Zen (free models)</option>
-          <option value="openai">OpenAI</option>
+          <option value="zen">OpenCode (any Zen model: Claude, GPT, Gemini, DeepSeek, Kimi, …)</option>
           <option value="groq">Groq</option>
+          <option value="openai">OpenAI</option>
           <option value="ollama">Ollama (local, no key)</option>
           <option value="custom">Custom OpenAI-compatible endpoint</option>
         </select>
@@ -76,7 +76,16 @@
           <label>Base URL</label>
           <input id="llm-url" placeholder="https://host/v1" />
         </div>
+        <div id="zen-connect" hidden>
+          <div class="row" style="margin-top:10px">
+            <button class="primary" id="zen-connect-btn">Connect OpenCode</button>
+            <button id="zen-refresh">Refresh models</button>
+            <span class="status" id="zen-status" style="margin:0"></span>
+          </div>
+          <div class="hint">Reuses the key from the OpenCode CLI if you have run <code>opencode auth login</code>; otherwise opens opencode.ai/zen so you can paste one below. Zen has no speech-to-text, so section 1 still needs its own key.</div>
+        </div>
         <label>Model</label>
+        <select id="llm-model-select" hidden></select>
         <input id="llm-model" list="llm-models" placeholder="model id" />
         <datalist id="llm-models"></datalist>
         <div class="hint" id="llm-hint"></div>

@@ -127,6 +127,8 @@ pub fn run() {
             commands::test_stt,
             commands::test_llm,
             commands::open_url,
+            commands::zen_models,
+            commands::import_opencode_key,
         ])
         .on_window_event(|window, event| {
             // Closing the settings window hides it so it can be reopened from the tray.

@@ -44,6 +44,10 @@ pub struct LlmConfig {
     /// Seconds to wait for cleanup before falling back to the raw transcript.
     #[serde(default = "default_timeout")]
     pub timeout_secs: u64,
+    /// Force a wire format: "chat", "responses", "messages" or "gemini". Empty = auto (Zen models
+    /// are routed by id; everything else is chat completions).
+    #[serde(default)]
+    pub wire: Option<String>,
 }
 
 fn default_timeout() -> u64 {
@@ -72,6 +76,7 @@ impl Default for Config {
                 model: "qwen/qwen3.8-27b".into(),
                 api_key: String::new(),
                 timeout_secs: default_timeout(),
+                wire: None,
             },
             launch_at_login: true,
         }

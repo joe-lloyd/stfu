@@ -51,43 +51,130 @@ struct Cleaned {
     cleaned: String,
 }
 
-/// Cleans a transcript through an OpenAI-compatible `/chat/completions` endpoint.
-/// The model must answer with `{"original": ..., "cleaned": ...}`; JSON mode is requested and
-/// dropped automatically for providers that reject `response_format`.
+/// Wire format spoken by the model endpoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Wire {
+    /// OpenAI `/chat/completions` (OpenAI, Groq, Ollama, most Zen open models).
+    Chat,
+    /// OpenAI `/responses` (Zen: GPT, Grok, Muse Spark).
+    Responses,
+    /// Anthropic `/messages` (Zen: Claude, Qwen, Union Alpha).
+    Messages,
+    /// Google `/models/{id}:generateContent` (Zen: Gemini).
+    Gemini,
+}
+
+/// Pick the wire format for a model. OpenCode Zen fronts many vendors and serves each family on
+/// its native endpoint, so route by model id there; everything else is plain chat completions.
+/// `override_` comes from config (`llm.wire`) for endpoints we cannot guess.
+pub fn wire_for(base_url: &str, model: &str, override_: Option<&str>) -> Wire {
+    match override_.map(|s| s.trim().to_ascii_lowercase()).as_deref() {
+        Some("chat") => return Wire::Chat,
+        Some("responses") => return Wire::Responses,
+        Some("messages") | Some("anthropic") => return Wire::Messages,
+        Some("gemini") | Some("google") => return Wire::Gemini,
+        _ => {}
+    }
+    if !base_url.contains("opencode.ai/zen") {
+        return Wire::Chat;
+    }
+    let m = model.to_ascii_lowercase();
+    if m.starts_with("claude") || m.starts_with("qwen") || m.starts_with("union-alpha") {
+        Wire::Messages
+    } else if m.starts_with("gpt") || m.starts_with("grok") || m.starts_with("muse-spark") {
+        Wire::Responses
+    } else if m.starts_with("gemini") {
+        Wire::Gemini
+    } else {
+        Wire::Chat
+    }
+}
+
+/// Cleans a transcript through the configured model. The model must answer with
+/// `{"original": ..., "cleaned": ...}`; JSON mode is requested where the wire format has one, and
+/// dropped automatically for providers that reject it.
 pub async fn cleanup(client: &reqwest::Client, cfg: &Config, transcript: &str) -> Result<String> {
     let key = cfg
         .llm_key()
         .context("no LLM API key: set llm.api_key in config.json or STFU_LLM_API_KEY")?;
-    let url = format!("{}/chat/completions", cfg.llm.base_url.trim_end_matches('/'));
-    let messages = json!([
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": format!("Transcript: \"\"\"{transcript}\"\"\"")}
-    ]);
-    let mut body = json!({
-        "model": cfg.llm.model,
-        "temperature": 0.2,
-        "response_format": {"type": "json_object"},
-        "messages": messages,
-    });
+    let base = cfg.llm.base_url.trim_end_matches('/');
+    let user = format!("Transcript: \"\"\"{transcript}\"\"\"");
+    let wire = wire_for(base, &cfg.llm.model, cfg.llm.wire.as_deref());
+    let timeout = cfg.llm.timeout_secs.max(1);
 
-    let mut text = send(client, &url, &key, &body, cfg.llm.timeout_secs).await?;
-    if text.is_err_400() {
-        // Provider does not support response_format: ask again without it.
-        log::debug!("provider rejected response_format, retrying without JSON mode");
-        body.as_object_mut().unwrap().remove("response_format");
-        text = send(client, &url, &key, &body, cfg.llm.timeout_secs).await?;
-    }
-    let text = text.into_result()?;
+    let content = match wire {
+        Wire::Chat => {
+            let url = format!("{base}/chat/completions");
+            let mut body = json!({
+                "model": cfg.llm.model, "temperature": 0.2,
+                "response_format": {"type": "json_object"},
+                "messages": [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": user}],
+            });
+            let mut reply = send(client, client.post(&url).bearer_auth(&key), &body, timeout).await?;
+            if reply.is_err_400() {
+                log::debug!("provider rejected response_format, retrying without JSON mode");
+                body.as_object_mut().unwrap().remove("response_format");
+                reply = send(client, client.post(&url).bearer_auth(&key), &body, timeout).await?;
+            }
+            let text = reply.into_result()?;
+            let parsed: ChatResponse = serde_json::from_str(&text).context("chat: unexpected JSON")?;
+            parsed.choices.into_iter().next().and_then(|c| c.message.content).unwrap_or_default()
+        }
+        Wire::Responses => {
+            let url = format!("{base}/responses");
+            let body = json!({
+                "model": cfg.llm.model, "temperature": 0.2,
+                "instructions": SYSTEM_PROMPT, "input": user,
+                "text": {"format": {"type": "json_object"}},
+            });
+            let text = send(client, client.post(&url).bearer_auth(&key), &body, timeout).await?.into_result()?;
+            let v: serde_json::Value = serde_json::from_str(&text).context("responses: unexpected JSON")?;
+            let mut out = String::new();
+            for item in v["output"].as_array().into_iter().flatten() {
+                if item["type"] == "message" {
+                    for part in item["content"].as_array().into_iter().flatten() {
+                        if part["type"] == "output_text" {
+                            out.push_str(part["text"].as_str().unwrap_or(""));
+                        }
+                    }
+                }
+            }
+            if out.is_empty() {
+                out = v["output_text"].as_str().unwrap_or("").to_string();
+            }
+            out
+        }
+        Wire::Messages => {
+            let url = format!("{base}/messages");
+            let body = json!({
+                "model": cfg.llm.model, "max_tokens": 2048, "temperature": 0.2,
+                "system": SYSTEM_PROMPT,
+                "messages": [{"role": "user", "content": user}],
+            });
+            let req = client.post(&url).header("x-api-key", &key).header("anthropic-version", "2023-06-01");
+            let text = send(client, req, &body, timeout).await?.into_result()?;
+            let v: serde_json::Value = serde_json::from_str(&text).context("messages: unexpected JSON")?;
+            v["content"].as_array().into_iter().flatten()
+                .filter(|b| b["type"] == "text")
+                .map(|b| b["text"].as_str().unwrap_or(""))
+                .collect::<String>()
+        }
+        Wire::Gemini => {
+            let url = format!("{base}/models/{}:generateContent", cfg.llm.model);
+            let body = json!({
+                "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+                "contents": [{"role": "user", "parts": [{"text": user}]}],
+                "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"},
+            });
+            let text = send(client, client.post(&url).header("x-goog-api-key", &key), &body, timeout).await?.into_result()?;
+            let v: serde_json::Value = serde_json::from_str(&text).context("gemini: unexpected JSON")?;
+            v["candidates"][0]["content"]["parts"].as_array().into_iter().flatten()
+                .map(|p| p["text"].as_str().unwrap_or(""))
+                .collect::<String>()
+        }
+    };
 
-    let parsed: ChatResponse = serde_json::from_str(&text).context("LLM returned unexpected JSON")?;
-    let content = parsed
-        .choices
-        .into_iter()
-        .next()
-        .and_then(|c| c.message.content)
-        .unwrap_or_default();
     let content = strip_fences(content.trim());
-
     let cleaned = match extract_cleaned(&content) {
         Some(c) => c,
         None => {
@@ -124,17 +211,14 @@ impl Reply {
 }
 
 async fn send(
-    client: &reqwest::Client,
-    url: &str,
-    key: &str,
+    _client: &reqwest::Client,
+    req: reqwest::RequestBuilder,
     body: &serde_json::Value,
     timeout_secs: u64,
 ) -> Result<Reply> {
-    let resp = client
-        .post(url)
-        .bearer_auth(key)
+    let resp = req
         .json(body)
-        .timeout(Duration::from_secs(timeout_secs.max(1)))
+        .timeout(Duration::from_secs(timeout_secs))
         .send()
         .await
         .context("LLM request failed")?;
@@ -197,6 +281,20 @@ mod tests {
         let reply = "Sure! {\"original\": \"um hi\", \"cleaned\": \"Hi.\"} hope that helps";
         assert_eq!(extract_cleaned(reply).as_deref(), Some("Hi."));
         assert_eq!(extract_cleaned("not json"), None);
+    }
+
+    #[test]
+    fn routes_zen_models_to_their_native_endpoints() {
+        let z = "https://opencode.ai/zen/v1";
+        assert_eq!(wire_for(z, "claude-haiku-4-5", None), Wire::Messages);
+        assert_eq!(wire_for(z, "qwen3.6-plus", None), Wire::Messages);
+        assert_eq!(wire_for(z, "gpt-5.4-nano", None), Wire::Responses);
+        assert_eq!(wire_for(z, "grok-4.6", None), Wire::Responses);
+        assert_eq!(wire_for(z, "gemini-3.5-flash-lite", None), Wire::Gemini);
+        assert_eq!(wire_for(z, "big-pickle", None), Wire::Chat);
+        assert_eq!(wire_for(z, "nemotron-3.5-lightning-free", None), Wire::Chat);
+        assert_eq!(wire_for("https://api.groq.com/openai/v1", "qwen/qwen3.8-27b", None), Wire::Chat);
+        assert_eq!(wire_for("https://x/v1", "anything", Some("messages")), Wire::Messages);
     }
 
     #[test]

@@ -12,12 +12,14 @@ const STT_PRESETS: Record<string, { url: string; model: string; keyUrl: string }
   custom: { url: "", model: "", keyUrl: "" },
 };
 
+interface ZenModel { id: string; free: boolean; wire: string }
+
 const LLM_PRESETS: Record<string, { url: string; models: string[]; keyUrl: string; hint: string }> = {
   zen: {
     url: "https://opencode.ai/zen/v1",
-    models: ["big-pickle", "nemotron-3.5-lightning-free", "ling-3.0-flash-fin-free", "mimo-v2.5-free", "union-alpha", "nemotron-3-ultra-free", "muse-spark-1.3-contributor-free"],
+    models: [],
     keyUrl: "https://opencode.ai/zen",
-    hint: "Free models are promotional and may disappear. Sign in at opencode.ai/zen and copy the API key.",
+    hint: "One OpenCode account, every model they host. Each model is routed to its native endpoint automatically. Free-tier models may require being signed in to OpenCode's own app; paid ones bill your OpenCode account.",
   },
   openai: { url: "https://api.openai.com/v1", models: ["gpt-5-mini", "gpt-5"], keyUrl: "https://platform.openai.com/api-keys", hint: "" },
   groq: { url: "https://api.groq.com/openai/v1", models: ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"], keyUrl: "https://console.groq.com/keys", hint: "Same Groq key as speech-to-text works here. Free tier. Qwen keeps every sentence; gpt-oss-20b is faster but sometimes drops text." },
@@ -51,14 +53,62 @@ function applySttProvider(p: string) {
 function applyLlmProvider(p: string) {
   const preset = LLM_PRESETS[p];
   $("llm-custom").hidden = p !== "custom";
+  $("zen-connect").hidden = p !== "zen";
   if (p !== "custom") $<HTMLInputElement>("llm-url").value = preset.url;
   const list = $<HTMLDataListElement>("llm-models");
   list.innerHTML = preset.models.map((m) => `<option value="${m}">`).join("");
   const modelInput = $<HTMLInputElement>("llm-model");
-  if (!preset.models.includes(modelInput.value) && preset.models.length) modelInput.value = preset.models[0];
+  const modelSelect = $<HTMLSelectElement>("llm-model-select");
+  if (p === "zen") {
+    // Zen: a real dropdown filled live from /v1/models; the text input stays as the source of truth.
+    modelSelect.hidden = false;
+    modelInput.placeholder = "model id (or pick above)";
+    if ($<HTMLInputElement>("llm-key").value) void loadZenModels();
+    else modelSelect.innerHTML = `<option value="">Connect OpenCode to list models</option>`;
+  } else {
+    modelSelect.hidden = true;
+    if (!preset.models.includes(modelInput.value) && preset.models.length) modelInput.value = preset.models[0];
+  }
   $("llm-hint").textContent = preset.hint;
   $<HTMLButtonElement>("llm-getkey").hidden = !preset.keyUrl;
   if (p === "ollama" && !$<HTMLInputElement>("llm-key").value) $<HTMLInputElement>("llm-key").value = "ollama";
+}
+
+async function loadZenModels() {
+  const key = $<HTMLInputElement>("llm-key").value.trim();
+  const select = $<HTMLSelectElement>("llm-model-select");
+  const modelInput = $<HTMLInputElement>("llm-model");
+  setStatus("zen-status", "Loading models…");
+  try {
+    const models = await invoke<ZenModel[]>("zen_models", { apiKey: key });
+    const free = models.filter((m) => m.free);
+    const paid = models.filter((m) => !m.free);
+    const opt = (m: ZenModel) => `<option value="${m.id}">${m.id}  ·  ${m.wire}</option>`;
+    select.innerHTML =
+      (free.length ? `<optgroup label="Free">${free.map(opt).join("")}</optgroup>` : "") +
+      `<optgroup label="Paid (billed to your OpenCode account)">${paid.map(opt).join("")}</optgroup>`;
+    if (!models.some((m) => m.id === modelInput.value)) {
+      modelInput.value = (free[0] ?? paid[0])?.id ?? "";
+    }
+    select.value = modelInput.value;
+    setStatus("zen-status", `${models.length} models`, "ok");
+  } catch (e) {
+    setStatus("zen-status", String(e), "err");
+  }
+}
+
+async function connectOpenCode() {
+  const keyInput = $<HTMLInputElement>("llm-key");
+  setStatus("zen-status", "Looking for OpenCode CLI credentials…");
+  try {
+    keyInput.value = await invoke<string>("import_opencode_key");
+    setStatus("zen-status", "Key imported from the OpenCode CLI", "ok");
+    await loadZenModels();
+  } catch (e) {
+    setStatus("zen-status", "Not logged in via the CLI. Opening opencode.ai/zen: paste the key below, then Refresh models.", "err");
+    void invoke("open_url", { url: LLM_PRESETS.zen.keyUrl });
+    keyInput.focus();
+  }
 }
 
 function collect(): Config {
@@ -136,6 +186,10 @@ async function save() {
 }
 
 $("stt-provider").addEventListener("change", (e) => applySttProvider((e.target as HTMLSelectElement).value));
+$("zen-connect-btn").addEventListener("click", () => void connectOpenCode());
+$("zen-refresh").addEventListener("click", () => void loadZenModels());
+$("llm-model-select").addEventListener("change", (e) => { $<HTMLInputElement>("llm-model").value = (e.target as HTMLSelectElement).value; });
+$("llm-key").addEventListener("change", () => { if ($<HTMLSelectElement>("llm-provider").value === "zen") void loadZenModels(); });
 $("llm-provider").addEventListener("change", (e) => applyLlmProvider((e.target as HTMLSelectElement).value));
 $("stt-show").addEventListener("click", () => toggleShow("stt-key"));
 $("llm-show").addEventListener("click", () => toggleShow("llm-key"));

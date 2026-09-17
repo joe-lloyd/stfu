@@ -63,6 +63,10 @@ pnpm tauri dev          # run
 pnpm tauri build        # produce .app/.dmg (macOS) or .msi/.exe (Windows)
 ```
 
+### OpenCode as the clean-up provider
+
+Pick "OpenCode" in Settings and press **Connect OpenCode**. If you have run `opencode auth login` and signed in to OpenCode Zen, the key is imported from the CLI's `auth.json`; otherwise the Zen page opens for you to paste one. The model dropdown is then filled live from Zen's model list, Free models first. Every Zen model is routed to its native endpoint automatically (chat completions, Responses, Anthropic Messages or Gemini), so Claude, GPT, Gemini, DeepSeek, Kimi, GLM and the rest all work through the one account. Zen has no speech-to-text, so section 1 still needs a Groq or OpenAI key. Set `llm.wire` in the config to force a wire format for a custom endpoint.
+
 ### Keys
 
 On first launch (or whenever a key is missing) the **Settings** window opens. Pick a provider, click "Get a key" to open the provider's key page, paste the key, hit **Test**, then **Save**. Settings is also in the menu bar / tray menu.
