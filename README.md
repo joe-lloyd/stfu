@@ -71,6 +71,40 @@ The chosen language does two things. It is passed to the transcriber as a hint, 
 
 Selecting a language never causes translation. With Dutch selected, an English sentence still comes out in English. That is deliberate: telling a model to "write the output in Dutch" makes it translate the occasional English dictation, which was measured and rejected.
 
+## Profiles: cloud for speed, local for privacy
+
+A profile is a complete set of providers. Two ship by default:
+
+| Profile | Speech to text | Clean-up | Network |
+|---|---|---|---|
+| Cloud (free) | Groq `whisper-large-v3-turbo` | Groq `qwen/qwen3.8-27b` | yes |
+| Local (offline) | whisper.cpp server on `:8080` | Ollama `llama3.2:3b` | none |
+
+Switch from the tray's **Profile** submenu or the dropdown in Settings; the tray and the window stay in step. Add your own with **New…**, which copies the profile you are on. An existing config from before profiles is folded into "Cloud (free)" automatically with its keys intact.
+
+### Running fully offline
+
+Nothing leaves the machine on the local profile, and no API key is needed: any `localhost` endpoint is treated as keyless.
+
+**Speech to text.** whisper.cpp is the fastest option on Apple Silicon because it uses the GPU:
+
+```sh
+brew install whisper-cpp
+curl -L -o ~/.whisper/ggml-base.en.bin \
+  https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin
+whisper-server -m ~/.whisper/ggml-base.en.bin --port 8080
+```
+
+Small models are the fast ones. Measured here with `tiny.en`: a ten-word sentence transcribed in **0.4 s**. `base.en` is the sensible default, `small.en` is more accurate and still usable. The server loads one model at startup, so no model name is needed in Settings. [Speaches](https://speaches.ai) is the alternative if you prefer Docker and an OpenAI-compatible API.
+
+**Clean-up.** Ollama, no key and no network:
+
+```sh
+ollama pull llama3.2:3b
+```
+
+Cleaning up dictation is an easy task, so a small model is the right call: `llama3.2:3b`, `qwen3.5:4b`, `gemma3:4b` and `phi4-mini` all handle it and keep the round trip short. Settings lists whatever you have pulled automatically and says whether Ollama is actually running.
+
 ### OpenCode as the clean-up provider
 
 Pick "OpenCode" in Settings and press **Connect OpenCode**. If you have run `opencode auth login` and signed in to OpenCode Zen, the key is imported from the CLI's `auth.json`; otherwise the Zen page opens for you to paste one. The model dropdown is then filled live from Zen's model list, Free models first. Every Zen model is routed to its native endpoint automatically (chat completions, Responses, Anthropic Messages or Gemini), so Claude, GPT, Gemini, DeepSeek, Kimi, GLM and the rest all work through the one account. Zen has no speech-to-text, so section 1 still needs a Groq or OpenAI key. Set `llm.wire` in the config to force a wire format for a custom endpoint.

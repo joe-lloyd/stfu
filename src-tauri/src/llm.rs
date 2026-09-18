@@ -97,12 +97,12 @@ pub async fn cleanup(client: &reqwest::Client, cfg: &Config, transcript: &str) -
     let key = cfg
         .llm_key()
         .context("no LLM API key: set llm.api_key in config.json or STFU_LLM_API_KEY")?;
-    let base = cfg.llm.base_url.trim_end_matches('/');
+    let base = cfg.llm().base_url.trim_end_matches('/');
     // The system prompt carries the language's own conventions (fillers, capitalisation, an
     // example in that language). A pinned language is still only a hint about what to expect, not
     // an instruction to translate: someone who pins Dutch still dictates the odd English sentence,
     // and "write it in Dutch" makes models translate that. Measured against the live model.
-    let language = cfg.stt.language.trim();
+    let language = cfg.stt().language.trim();
     let system = format!("{SYSTEM_PROMPT}{}", crate::lang::cleanup_hint(language));
     let user = match crate::lang::english_name(language) {
         Some(name) => format!(
@@ -111,14 +111,14 @@ pub async fn cleanup(client: &reqwest::Client, cfg: &Config, transcript: &str) -
         ),
         None => format!("Transcript: \"\"\"{transcript}\"\"\""),
     };
-    let wire = wire_for(base, &cfg.llm.model, cfg.llm.wire.as_deref());
-    let timeout = cfg.llm.timeout_secs.max(1);
+    let wire = wire_for(base, &cfg.llm().model, cfg.llm().wire.as_deref());
+    let timeout = cfg.llm().timeout_secs.max(1);
 
     let content = match wire {
         Wire::Chat => {
             let url = format!("{base}/chat/completions");
             let mut body = json!({
-                "model": cfg.llm.model, "temperature": 0.2,
+                "model": cfg.llm().model, "temperature": 0.2,
                 "response_format": {"type": "json_object"},
                 "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
             });
@@ -135,7 +135,7 @@ pub async fn cleanup(client: &reqwest::Client, cfg: &Config, transcript: &str) -
         Wire::Responses => {
             let url = format!("{base}/responses");
             let body = json!({
-                "model": cfg.llm.model, "temperature": 0.2,
+                "model": cfg.llm().model, "temperature": 0.2,
                 "instructions": system, "input": user,
                 "text": {"format": {"type": "json_object"}},
             });
@@ -159,7 +159,7 @@ pub async fn cleanup(client: &reqwest::Client, cfg: &Config, transcript: &str) -
         Wire::Messages => {
             let url = format!("{base}/messages");
             let body = json!({
-                "model": cfg.llm.model, "max_tokens": 2048, "temperature": 0.2,
+                "model": cfg.llm().model, "max_tokens": 2048, "temperature": 0.2,
                 "system": system,
                 "messages": [{"role": "user", "content": user}],
             });
@@ -172,7 +172,7 @@ pub async fn cleanup(client: &reqwest::Client, cfg: &Config, transcript: &str) -
                 .collect::<String>()
         }
         Wire::Gemini => {
-            let url = format!("{base}/models/{}:generateContent", cfg.llm.model);
+            let url = format!("{base}/models/{}:generateContent", cfg.llm().model);
             let body = json!({
                 "systemInstruction": {"parts": [{"text": &system}]},
                 "contents": [{"role": "user", "parts": [{"text": user}]}],

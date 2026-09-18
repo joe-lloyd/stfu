@@ -50,10 +50,16 @@ fn pill(app: &AppHandle) -> Option<WebviewWindow> {
 fn show_settings(app: &AppHandle) {
     #[cfg(target_os = "macos")]
     let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
-    if let Some(win) = app.get_webview_window(SETTINGS) {
-        let _ = win.show();
-        let _ = win.unminimize();
-        let _ = win.set_focus();
+    match app.get_webview_window(SETTINGS) {
+        Some(win) => {
+            let _ = win.show();
+            let _ = win.unminimize();
+            let _ = win.set_focus();
+            // The window is reused rather than recreated, so tell it to re-read the config: the
+            // profile or language may have been changed from the tray since it was last open.
+            let _ = app.emit_to(SETTINGS, "config-changed", ());
+        }
+        None => log::error!("settings window does not exist"),
     }
 }
 
@@ -117,14 +123,15 @@ pub fn run() {
         }
     };
     log::info!(
-        "config: {} | hotkey {:?} | stt {} @ {} | llm {} @ {} (enabled={})",
+        "config: {} | profile {:?} | hotkey {:?} | stt {} @ {} | llm {} @ {} (enabled={})",
         Config::path().map(|p| p.display().to_string()).unwrap_or_default(),
+        config.active_profile,
         config.hotkey,
-        config.stt.model,
-        config.stt.base_url,
-        config.llm.model,
-        config.llm.base_url,
-        config.llm.enabled
+        config.stt().model,
+        config.stt().base_url,
+        config.llm().model,
+        config.llm().base_url,
+        config.llm().enabled
     );
 
     let shared: SharedConfig = Arc::new(RwLock::new(config.clone()));
@@ -149,6 +156,8 @@ pub fn run() {
             commands::open_pane,
             commands::app_version,
             commands::check_for_updates,
+            commands::probe_local,
+            commands::set_active_profile,
             commands::zen_models,
             commands::import_opencode_key,
         ])
@@ -179,8 +188,24 @@ pub fn run() {
                 }
             }
 
+            // Profile submenu: swap the whole provider set (cloud vs fully local) in one click.
+            let profile_items: Vec<CheckMenuItem<_>> = config
+                .profiles
+                .iter()
+                .map(|p| {
+                    CheckMenuItemBuilder::with_id(format!("profile:{}", p.name), &p.name)
+                        .checked(p.name == config.active_profile)
+                        .build(app)
+                })
+                .collect::<tauri::Result<_>>()?;
+            let profile_refs: Vec<&dyn tauri::menu::IsMenuItem<_>> =
+                profile_items.iter().map(|i| i as &dyn tauri::menu::IsMenuItem<_>).collect();
+            let profile_menu = SubmenuBuilder::new(app, format!("Profile: {}", config.active_profile))
+                .items(&profile_refs)
+                .build()?;
+
             // Language submenu: switch dictation language without opening Settings.
-            let current_lang = config.stt.language.trim().to_string();
+            let current_lang = config.stt().language.trim().to_string();
             let lang_items: Vec<CheckMenuItem<_>> = lang::LANGUAGES
                 .iter()
                 .map(|(code, label)| {
@@ -195,6 +220,10 @@ pub fn run() {
                 .items(&lang_refs)
                 .build()?;
 
+            app.manage(commands::ProfileMenu {
+                submenu: profile_menu.clone(),
+                items: std::sync::Mutex::new(profile_items.clone()),
+            });
             app.manage(commands::LangMenu {
                 items: lang_items.clone(),
                 submenu: language_menu.clone(),
@@ -209,6 +238,7 @@ pub fn run() {
             let quit = MenuItemBuilder::with_id("quit", "Quit stfu").build(app)?;
             let menu = MenuBuilder::new(app)
                 .items(&[&settings])
+                .item(&profile_menu)
                 .item(&language_menu)
                 .items(&[&autostart])
                 .separator()
@@ -225,6 +255,18 @@ pub fn run() {
                     "quit" => app.exit(0),
                     "settings" => show_settings(app),
                     "update" => updater::check_now(app.clone()),
+                    id if id.starts_with("profile:") => {
+                        let name = id.trim_start_matches("profile:").to_string();
+                        if let Err(e) = commands::set_active_profile(
+                            app.clone(),
+                            app.state(),
+                            app.state(),
+                            app.state(),
+                            name,
+                        ) {
+                            log::error!("could not switch profile: {e}");
+                        }
+                    }
                     id if id.starts_with("lang:") => {
                         let code = id.trim_start_matches("lang:").to_string();
                         // Radio behaviour: the clicked item wins, every other one clears.
@@ -234,7 +276,8 @@ pub fn run() {
                         let _ = language_menu_for_tray
                             .set_text(format!("Language: {}", lang::label(&code)));
                         let mut cfg = shared_for_tray.write().unwrap();
-                        cfg.stt.language = code.clone();
+                        cfg.active_mut().stt.language = code.clone();
+                        let _ = app.emit_to(SETTINGS, "config-changed", ());
                         match cfg.save() {
                             Ok(()) => log::info!("dictation language set to {:?}", code),
                             Err(e) => log::warn!("could not save config: {e:#}"),
@@ -458,7 +501,7 @@ async fn process(
         return Ok(None);
     }
 
-    let text = if cfg.llm.enabled {
+    let text = if cfg.llm().enabled {
         set_state(app, "processing", Some("Cleaning up…".into()));
         let t1 = Instant::now();
         match llm::cleanup(client, cfg, &raw).await {

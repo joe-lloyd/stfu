@@ -3,7 +3,7 @@
 use crate::config::Config;
 use crate::{audio, lang, llm, stt, SharedConfig};
 use tauri::menu::{CheckMenuItem, Submenu};
-use tauri::{State, Wry};
+use tauri::{Emitter, State, Wry};
 
 /// The tray's language submenu, so a change made in Settings updates the menu too.
 pub struct LangMenu {
@@ -25,10 +25,12 @@ pub fn config_path() -> String {
 pub fn save_config(
     state: State<'_, SharedConfig>,
     lang_menu: State<'_, LangMenu>,
+    profile_menu: State<'_, ProfileMenu>,
     cfg: Config,
 ) -> Result<(), String> {
     cfg.save().map_err(|e| format!("{e:#}"))?;
-    let code = cfg.stt.language.trim().to_string();
+    sync_profile_menu(&profile_menu, &cfg);
+    let code = cfg.stt().language.trim().to_string();
     for (item, (c, _)) in lang_menu.items.iter().zip(lang::LANGUAGES) {
         let _ = item.set_checked(*c == code);
     }
@@ -61,7 +63,7 @@ pub async fn test_stt(cfg: Config) -> Result<String, String> {
     let t = std::time::Instant::now();
     stt::transcribe(&client, &cfg, wav)
         .await
-        .map(|_| format!("Works. {} responded in {} ms.", cfg.stt.model, t.elapsed().as_millis()))
+        .map(|_| format!("Works. {} responded in {} ms.", cfg.stt().model, t.elapsed().as_millis()))
         .map_err(|e| format!("{e:#}"))
 }
 
@@ -300,4 +302,98 @@ pub async fn check_for_updates(app: tauri::AppHandle) -> Result<String, String> 
         Ok(None) => Ok(format!("Up to date (version {}).", env!("CARGO_PKG_VERSION"))),
         Err(e) => Err(format!("{e:#}")),
     }
+}
+
+#[derive(serde::Serialize)]
+pub struct LocalStatus {
+    pub ollama_up: bool,
+    pub ollama_models: Vec<String>,
+    pub whisper_up: bool,
+}
+
+/// Is anything usable running on this machine right now? Drives the green/red hints in Settings
+/// so a local profile can be set up without guesswork.
+#[tauri::command]
+pub async fn probe_local(ollama_url: String, whisper_url: String) -> LocalStatus {
+    let client = reqwest::Client::new();
+    let ollama_models = ollama_models_inner(&client, &ollama_url).await.unwrap_or_default();
+    let whisper_up = reachable(&client, &whisper_url).await;
+    LocalStatus {
+        ollama_up: !ollama_models.is_empty() || reachable(&client, &ollama_url).await,
+        ollama_models,
+        whisper_up,
+    }
+}
+
+async fn reachable(client: &reqwest::Client, url: &str) -> bool {
+    let base = url.trim_end_matches('/').trim_end_matches("/v1");
+    client
+        .get(base)
+        .timeout(std::time::Duration::from_millis(1200))
+        .send()
+        .await
+        .is_ok()
+}
+
+/// Models already pulled in Ollama. Uses the native `/api/tags`, which lives beside `/v1`.
+async fn ollama_models_inner(client: &reqwest::Client, url: &str) -> Option<Vec<String>> {
+    let base = url.trim_end_matches('/').trim_end_matches("/v1");
+    let v: serde_json::Value = client
+        .get(format!("{base}/api/tags"))
+        .timeout(std::time::Duration::from_millis(1500))
+        .send()
+        .await
+        .ok()?
+        .json()
+        .await
+        .ok()?;
+    Some(
+        v["models"]
+            .as_array()?
+            .iter()
+            .filter_map(|m| m["name"].as_str().map(str::to_string))
+            .collect(),
+    )
+}
+
+/// Switch profile without opening Settings. Keeps the tray menu and the config in step.
+#[tauri::command]
+pub fn set_active_profile(
+    app: tauri::AppHandle,
+    state: State<'_, SharedConfig>,
+    profile_menu: State<'_, ProfileMenu>,
+    lang_menu: State<'_, LangMenu>,
+    name: String,
+) -> Result<(), String> {
+    let mut cfg = state.write().unwrap();
+    if !cfg.profiles.iter().any(|p| p.name == name) {
+        return Err(format!("no profile called {name}"));
+    }
+    cfg.active_profile = name.clone();
+    cfg.save().map_err(|e| format!("{e:#}"))?;
+    sync_profile_menu(&profile_menu, &cfg);
+    // The language lives in the profile, so the language menu follows it.
+    let code = cfg.stt().language.trim().to_string();
+    for (item, (c, _)) in lang_menu.items.iter().zip(lang::LANGUAGES) {
+        let _ = item.set_checked(*c == code);
+    }
+    let _ = lang_menu.submenu.set_text(format!("Language: {}", lang::label(&code)));
+    log::info!("profile switched to {name:?}");
+    let _ = app.emit_to("settings", "config-changed", ());
+    Ok(())
+}
+
+/// The tray's profile submenu. Rebuilt when profiles are added or removed in Settings.
+pub struct ProfileMenu {
+    pub submenu: Submenu<Wry>,
+    pub items: std::sync::Mutex<Vec<CheckMenuItem<Wry>>>,
+}
+
+pub fn sync_profile_menu(menu: &ProfileMenu, cfg: &Config) {
+    let items = menu.items.lock().unwrap();
+    for item in items.iter() {
+        let checked = item.text().map(|t| t == cfg.active_profile).unwrap_or(false);
+        let _ = item.set_checked(checked);
+    }
+    let _ = menu.submenu.set_text(format!("Profile: {}", cfg.active_profile));
 }

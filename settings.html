@@ -30,6 +30,8 @@
       .perm .why { color: #9a9aa5; font-size: 11px; flex: 1; }
       .perm button { flex: none; }
       .perm.ok button { display: none; }
+      code.cmd { display: block; margin: 5px 0; padding: 5px 7px; background: #0e0e12; border-radius: 5px; font-size: 11px; user-select: text; }
+      .up { color: #3ddc84; } .down { color: #ff8f8f; }
       button:disabled { opacity: 0.5; cursor: default; }
       .status { min-height: 18px; font-size: 12px; margin-top: 8px; color: #9a9aa5; }
       .status.ok { color: #3ddc84; }
@@ -46,6 +48,16 @@
       <h1>stfu</h1>
       <p class="sub">Hold <code id="hotkey">Fn</code>, talk, release. Three short steps below; each is a minute's work.</p>
 
+      <section id="profile-bar">
+        <h2>Profile</h2>
+        <div class="row">
+          <select id="profile-select" style="flex:1"></select>
+          <button id="profile-new">New…</button>
+          <button id="profile-delete">Delete</button>
+        </div>
+        <div class="hint">A profile is a whole set of providers. Keep a cloud one for everyday speed and a fully local one for anything sensitive, then switch here or from the tray menu. Settings below always edit the selected profile.</div>
+      </section>
+
       <section id="perm-section">
         <h2>1. Permissions <button class="link" id="perm-recheck">Recheck</button></h2>
         <div id="perm-list"></div>
@@ -56,9 +68,15 @@
         <h2>2. Speech to text <button class="link" id="stt-getkey">Get a key ↗</button></h2>
         <label>Provider</label>
         <select id="stt-provider">
-          <option value="groq">Groq · whisper-large-v3-turbo (fast, cheap)</option>
-          <option value="openai">OpenAI · whisper-1</option>
-          <option value="custom">Custom OpenAI-compatible endpoint</option>
+          <optgroup label="Cloud">
+            <option value="groq">Groq · whisper-large-v3-turbo (fast, free tier)</option>
+            <option value="openai">OpenAI · whisper-1</option>
+          </optgroup>
+          <optgroup label="On this machine (offline)">
+            <option value="whispercpp">whisper.cpp server · best on Apple Silicon</option>
+            <option value="speaches">Speaches · OpenAI-compatible, Docker</option>
+          </optgroup>
+          <option value="custom">Custom endpoint</option>
         </select>
         <div id="stt-custom" hidden>
           <label>Base URL</label>
@@ -66,6 +84,7 @@
           <label>Model</label>
           <input id="stt-model" placeholder="whisper-1" />
         </div>
+        <div class="hint" id="stt-setup"></div>
         <label>Language</label>
         <select id="stt-language"></select>
         <div class="hint">Auto-detect handles mixed languages well. Pin a language if detection keeps guessing wrong. Pinning is only a hint: dictate a sentence in another language and it stays in that language, never translated. Switch quickly from the tray menu.</div>
@@ -83,10 +102,14 @@
         <label class="toggle"><input type="checkbox" id="llm-enabled" /> Clean up the transcript with an LLM (remove ums, fix punctuation, bullet lists)</label>
         <label>Provider</label>
         <select id="llm-provider">
-          <option value="zen">OpenCode (any Zen model: Claude, GPT, Gemini, DeepSeek, Kimi, …)</option>
-          <option value="groq">Groq</option>
-          <option value="openai">OpenAI</option>
-          <option value="ollama">Ollama (local, no key)</option>
+          <optgroup label="Cloud">
+            <option value="zen">OpenCode (any Zen model: Claude, GPT, Gemini, DeepSeek, Kimi, …)</option>
+            <option value="groq">Groq</option>
+            <option value="openai">OpenAI</option>
+          </optgroup>
+          <optgroup label="On this machine (offline)">
+            <option value="ollama">Ollama · no key, no network</option>
+          </optgroup>
           <option value="custom">Custom OpenAI-compatible endpoint</option>
         </select>
         <div id="llm-custom" hidden>
@@ -101,6 +124,7 @@
           </div>
           <div class="hint">Reuses the key from the OpenCode CLI if you have run <code>opencode auth login</code>; otherwise opens opencode.ai/zen so you can paste one below. Zen has no speech-to-text, so section 1 still needs its own key.</div>
         </div>
+        <div class="hint" id="llm-setup"></div>
         <label>Model</label>
         <select id="llm-model-select" hidden></select>
         <input id="llm-model" list="llm-models" placeholder="model id" />
