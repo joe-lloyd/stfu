@@ -20,8 +20,13 @@ use std::time::{Duration, Instant};
 use tauri::{
     menu::{CheckMenuItem, CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder, SubmenuBuilder},
     tray::TrayIconBuilder,
-    AppHandle, Emitter, Manager, PhysicalPosition, WebviewWindow,
+    AppHandle, Emitter, Manager, WebviewWindow,
 };
+
+#[cfg(target_os = "macos")]
+use tauri::LogicalPosition;
+#[cfg(not(target_os = "macos"))]
+use tauri::PhysicalPosition;
 
 const PILL: &str = "pill";
 const SETTINGS: &str = "settings";
@@ -72,17 +77,82 @@ fn hide_settings(app: &AppHandle) {
     let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 }
 
-/// Bottom-centre of the primary monitor, a little above the dock/taskbar.
+/// A monitor's frame in the unit the pill is positioned in: points on macOS, pixels elsewhere.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Rect {
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+}
+
+impl Rect {
+    fn contains(&self, x: f64, y: f64) -> bool {
+        x >= self.x && x < self.x + self.w && y >= self.y && y < self.y + self.h
+    }
+}
+
+/// Where the pill goes on `screen`: bottom-centre, `lift` above the bottom edge (clear of the dock/taskbar).
+fn pill_origin(screen: Rect, pill_w: f64, pill_h: f64, lift: f64) -> (f64, f64) {
+    (
+        screen.x + (screen.w - pill_w) / 2.0,
+        screen.y + screen.h - pill_h - lift,
+    )
+}
+
+/// Bottom-centre of the monitor the mouse is on, so the pill shows up where the user is working.
+/// Falls back to the primary monitor when the cursor cannot be read (e.g. Wayland).
 fn position_pill(win: &WebviewWindow) {
-    if let Ok(Some(monitor)) = win.primary_monitor() {
-        let size = monitor.size();
+    let monitors = win.available_monitors().unwrap_or_default();
+    let cursor = win.cursor_position().ok();
+    let primary = win.primary_monitor().ok().flatten();
+
+    // macOS lays displays out in points, and each display has its own scale, so Tauri's "physical"
+    // monitor positions are not in one shared space there (and the cursor is scaled by the primary
+    // display's factor). Work in points on macOS; Windows and X11 use one pixel space already.
+    #[cfg(target_os = "macos")]
+    let (to_unit, cursor_div) = (
+        |m: &tauri::Monitor| m.scale_factor(),
+        primary.as_ref().map_or(1.0, |m| m.scale_factor()),
+    );
+    #[cfg(not(target_os = "macos"))]
+    let (to_unit, cursor_div) = (|_: &tauri::Monitor| 1.0, 1.0);
+
+    let rect = |m: &tauri::Monitor| {
+        let d = to_unit(m);
+        Rect {
+            x: m.position().x as f64 / d,
+            y: m.position().y as f64 / d,
+            w: m.size().width as f64 / d,
+            h: m.size().height as f64 / d,
+        }
+    };
+
+    let target = cursor
+        .and_then(|c| {
+            let (cx, cy) = (c.x / cursor_div, c.y / cursor_div);
+            monitors.iter().find(|m| rect(m).contains(cx, cy)).cloned()
+        })
+        .or(primary);
+    let Some(monitor) = target else { return };
+
+    let screen = rect(&monitor);
+    log::info!(
+        "pill on {} {:?} (cursor {:?})",
+        monitor.name().map_or("?", |n| n.as_str()),
+        screen,
+        cursor.map(|c| (c.x, c.y))
+    );
+    #[cfg(target_os = "macos")]
+    {
+        let (x, y) = pill_origin(screen, 190.0, 40.0, 90.0);
+        let _ = win.set_position(LogicalPosition::new(x, y));
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
         let scale = monitor.scale_factor();
-        let (w, h) = match win.outer_size() {
-            Ok(s) => (s.width as f64, s.height as f64),
-            Err(_) => (190.0 * scale, 40.0 * scale),
-        };
-        let x = monitor.position().x as f64 + (size.width as f64 - w) / 2.0;
-        let y = monitor.position().y as f64 + size.height as f64 - h - 90.0 * scale;
+        let (w, h) = (190.0 * scale, 40.0 * scale);
+        let (x, y) = pill_origin(screen, w, h, 90.0 * scale);
         let _ = win.set_position(PhysicalPosition::new(x as i32, y as i32));
     }
 }
@@ -551,4 +621,31 @@ fn finish(app: &AppHandle, result: anyhow::Result<Option<String>>) {
             let _ = win.hide();
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A laptop at the origin with a bigger external display to its right and one above it,
+    // laid out the way macOS reports them (points, top-left origin, negative y above).
+    const LAPTOP: Rect = Rect { x: 0.0, y: 0.0, w: 1512.0, h: 982.0 };
+    const RIGHT: Rect = Rect { x: 1512.0, y: -200.0, w: 2560.0, h: 1440.0 };
+    const ABOVE: Rect = Rect { x: 0.0, y: -1080.0, w: 1920.0, h: 1080.0 };
+
+    #[test]
+    fn contains_is_half_open_so_shared_edges_pick_one_screen() {
+        assert!(LAPTOP.contains(0.0, 0.0));
+        assert!(!LAPTOP.contains(1512.0, 10.0));
+        assert!(RIGHT.contains(1512.0, 10.0));
+        assert!(ABOVE.contains(100.0, -1.0));
+        assert!(!LAPTOP.contains(100.0, -1.0));
+    }
+
+    #[test]
+    fn pill_is_bottom_centre_of_the_chosen_screen() {
+        assert_eq!(pill_origin(LAPTOP, 190.0, 40.0, 90.0), (661.0, 852.0));
+        assert_eq!(pill_origin(RIGHT, 190.0, 40.0, 90.0), (2697.0, 1110.0));
+        assert_eq!(pill_origin(ABOVE, 190.0, 40.0, 90.0), (865.0, -130.0));
+    }
 }
