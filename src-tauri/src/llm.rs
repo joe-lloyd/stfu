@@ -90,10 +90,27 @@ pub fn wire_for(base_url: &str, model: &str, override_: Option<&str>) -> Wire {
     }
 }
 
+/// What was sent to and received from the model, kept for the history even when clean-up fails.
+#[derive(Debug, Default)]
+pub struct Trace {
+    pub prompt: Option<String>,
+    pub reply: Option<String>,
+    pub wire: Option<Wire>,
+}
+
 /// Cleans a transcript through the configured model. The model must answer with
 /// `{"original": ..., "cleaned": ...}`; JSON mode is requested where the wire format has one, and
 /// dropped automatically for providers that reject it.
 pub async fn cleanup(client: &reqwest::Client, cfg: &Config, transcript: &str) -> Result<String> {
+    cleanup_traced(client, cfg, transcript, &mut Trace::default()).await
+}
+
+pub async fn cleanup_traced(
+    client: &reqwest::Client,
+    cfg: &Config,
+    transcript: &str,
+    trace: &mut Trace,
+) -> Result<String> {
     let key = cfg
         .llm_key()
         .context("no LLM API key: set llm.api_key in config.json or STFU_LLM_API_KEY")?;
@@ -112,6 +129,8 @@ pub async fn cleanup(client: &reqwest::Client, cfg: &Config, transcript: &str) -
         None => format!("Transcript: \"\"\"{transcript}\"\"\""),
     };
     let wire = wire_for(base, &cfg.llm().model, cfg.llm().wire.as_deref());
+    trace.prompt = Some(user.clone());
+    trace.wire = Some(wire);
     let timeout = cfg.llm().timeout_secs.max(1);
 
     let content = match wire {
@@ -186,6 +205,7 @@ pub async fn cleanup(client: &reqwest::Client, cfg: &Config, transcript: &str) -
         }
     };
 
+    trace.reply = Some(content.clone());
     let content = strip_fences(content.trim());
     let cleaned = match extract_cleaned(&content) {
         Some(c) => c,

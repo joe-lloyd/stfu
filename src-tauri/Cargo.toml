@@ -1,6 +1,6 @@
 [package]
 name = "stfu"
-version = "0.6.1"
+version = "0.7.0"
 description = "Hold a key, talk, get clean text pasted where your cursor is."
 edition = "2021"
 
@@ -24,6 +24,7 @@ hound = "3.5"
 arboard = "3"
 dirs = "7"
 anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 log = "0.4"
 env_logger = "0.11"
 

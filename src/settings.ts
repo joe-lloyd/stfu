@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { showHistory } from "./history";
 
 interface SttConfig { base_url: string; api: string | null; model: string; api_key: string; language: string }
 interface LlmConfig { enabled: boolean; base_url: string; model: string; api_key: string; timeout_secs: number; wire: string | null }
@@ -10,6 +11,7 @@ interface Config {
   profiles: Profile[];
   launch_at_login: boolean;
   auto_update: boolean;
+  history: { enabled: boolean; save_audio: boolean };
 }
 interface LocalStatus { ollama_up: boolean; ollama_models: string[]; whisper_up: boolean }
 
@@ -190,6 +192,11 @@ function collect(): Config {
     profiles: cfg.profiles.map((p) => (p.name === edited.name ? edited : p)),
     launch_at_login: cfg.launch_at_login,
     auto_update: $<HTMLInputElement>("auto-update").checked,
+    // Owned by the History tab, which saves it on its own; carry the live values through.
+    history: {
+      enabled: $<HTMLInputElement>("hist-enabled").checked,
+      save_audio: $<HTMLInputElement>("hist-audio").checked,
+    },
   };
 }
 
@@ -298,6 +305,8 @@ async function load() {
   $("cfgpath").textContent = await invoke<string>("config_path");
   $("hotkey").textContent = cfg.hotkey.join(" + ");
   $<HTMLInputElement>("auto-update").checked = cfg.auto_update ?? true;
+  $<HTMLInputElement>("hist-enabled").checked = cfg.history?.enabled ?? true;
+  $<HTMLInputElement>("hist-audio").checked = cfg.history?.save_audio ?? true;
   $("app-version").textContent = `version ${await invoke<string>("app_version")}`;
 
   editing = cfg.active_profile || cfg.profiles[0].name;
@@ -406,6 +415,16 @@ $("stt-getkey").addEventListener("click", () => invoke("open_url", { url: STT_PR
 $("llm-getkey").addEventListener("click", () => invoke("open_url", { url: LLM_PRESETS[$<HTMLSelectElement>("llm-provider").value].keyUrl }));
 // Save on Cmd/Ctrl+S too.
 window.addEventListener("keydown", (e) => { if ((e.metaKey || e.ctrlKey) && e.key === "s") { e.preventDefault(); save(); } });
+
+function showTab(tab: "setup" | "history") {
+  $("tab-setup").hidden = tab !== "setup";
+  $("tab-history").hidden = tab !== "history";
+  $("tab-btn-setup").classList.toggle("active", tab === "setup");
+  $("tab-btn-history").classList.toggle("active", tab === "history");
+  if (tab === "history") void showHistory();
+}
+$("tab-btn-setup").addEventListener("click", () => showTab("setup"));
+$("tab-btn-history").addEventListener("click", () => showTab("history"));
 
 // The tray can change the profile or language while this window sits open; re-read when it does.
 listen("config-changed", () => void load());

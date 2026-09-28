@@ -164,6 +164,21 @@ Default hotkey is Ctrl+Win (`["ControlLeft", "MetaLeft"]`). There are no permiss
 - **The tray icon is hidden by default.** Click the `^` arrow next to the clock and drag the waveform icon onto the taskbar.
 - **Microphone privacy.** If nothing is recorded, allow desktop apps to use the microphone under Settings > Privacy & security > Microphone. Settings shows a Microphone row that goes red when the device cannot be opened. The keyboard hook cannot see elevated (admin) windows, so dictation into an admin PowerShell will not work unless stfu also runs elevated.
 
+## History
+
+Every dictation is written to a local file, one per day, so nothing is ever lost and you can see what each stage did:
+
+```
+~/Library/Application Support/stfu/history/2026-09-28.jsonl          (Windows: %APPDATA%\stfu\history, Linux: ~/.config/stfu/history)
+~/Library/Application Support/stfu/history/audio/2026-09-28/<id>.wav
+```
+
+Each line is one JSON object holding the whole take: when it happened and which app had focus, the profile and language, the audio (length, how long the key was held, the WAV file), the speech-to-text model, timing, raw transcript and full server reply, the clean-up model with the exact message it was sent, its raw reply, the cleaned text and any error or fallback, and finally what was pasted and whether pasting worked. Failed and empty takes are recorded too, with their error. Taps under 300 ms are not.
+
+Open **Settings > History** to browse by day, search, play the audio, copy the output, the raw transcript or the full record, open the folder, or delete a day. Recording history and keeping audio can each be switched off there. Audio costs about 32 KB per second of speech.
+
+The history never leaves the machine. The folder and files are readable by your user only (0700/0600 on macOS and Linux). Because the files are plain JSON Lines they also work with other tools, e.g. `jq -r .output.text ~/Library/Application\ Support/stfu/history/*.jsonl`.
+
 ## Behaviour details
 
 - Taps shorter than 300 ms are ignored.

@@ -1,6 +1,7 @@
 mod audio;
 mod commands;
 mod config;
+mod history;
 mod hotkey;
 mod inject;
 mod lang;
@@ -230,6 +231,13 @@ pub fn run() {
             commands::set_active_profile,
             commands::zen_models,
             commands::import_opencode_key,
+            commands::history_days,
+            commands::history_entries,
+            commands::history_audio,
+            commands::history_delete_day,
+            commands::history_open_folder,
+            commands::history_settings,
+            commands::copy_text,
         ])
         .on_window_event(|window, event| {
             // Closing the settings window hides it so it can be reopened from the tray.
@@ -479,6 +487,8 @@ fn pipeline_loop(
     let busy = Arc::new(AtomicBool::new(false));
     let mut recording = false;
     let mut started_at = Instant::now();
+    // The history record for the take in progress, stamped when the hotkey goes down.
+    let mut take = history::new_record();
 
     while let Ok(ev) = rx.recv() {
         match ev {
@@ -491,6 +501,9 @@ fn pipeline_loop(
                     Ok(levels) => {
                         recording = true;
                         started_at = Instant::now();
+                        // Read before the pill appears: the app in front now is where the text goes.
+                        take = history::new_record();
+                        take.target_app = history::frontmost_app();
                         if let Some(win) = pill(&app) {
                             position_pill(&win);
                             let _ = win.show();
@@ -513,8 +526,14 @@ fn pipeline_loop(
                 }
                 recording = false;
                 let wav = recorder.stop();
+                let held = started_at.elapsed();
+                let snapshot = cfg.read().unwrap().clone();
+                let mut rec = std::mem::replace(&mut take, history::new_record());
+                rec.profile = snapshot.active_profile.clone();
+                rec.language = snapshot.stt().language.trim().to_string();
+                rec.audio.held_ms = held.as_millis() as u64;
                 // Taps shorter than this are almost always accidental.
-                if started_at.elapsed() < Duration::from_millis(300) {
+                if held < Duration::from_millis(300) {
                     if let Some(win) = pill(&app) {
                         let _ = win.hide();
                     }
@@ -530,6 +549,11 @@ fn pipeline_loop(
                     }
                     Ok(w) => w,
                     Err(e) => {
+                        rec.outcome = "failed".into();
+                        rec.error = Some(format!("recording: {e:#}"));
+                        if snapshot.history.enabled {
+                            record_history(&app, &rec);
+                        }
                         finish(&app, Err(e));
                         continue;
                     }
@@ -538,16 +562,32 @@ fn pipeline_loop(
                 if let Ok(path) = Config::path() {
                     let _ = std::fs::write(path.with_file_name("last.wav"), &wav);
                 }
+                rec.audio.bytes = wav.len();
+                rec.audio.duration_ms = history::wav_duration_ms(&wav);
+                if snapshot.history.enabled && snapshot.history.save_audio {
+                    match history::dir().and_then(|root| history::save_audio(&root, &rec.id, &wav)) {
+                        Ok(rel) => rec.audio.file = Some(rel),
+                        Err(e) => log::warn!("could not keep audio for history: {e:#}"),
+                    }
+                }
                 busy.store(true, Ordering::SeqCst);
                 set_state(&app, "processing", Some("Transcribing…".into()));
 
-                let snapshot = cfg.read().unwrap().clone();
                 if snapshot.needs_setup() {
                     show_settings(&app);
                 }
                 let (app2, client2, busy2) = (app.clone(), client.clone(), busy.clone());
                 rt.spawn(async move {
-                    let result = process(&app2, &snapshot, &client2, wav).await;
+                    let t0 = Instant::now();
+                    let result = process(&app2, &snapshot, &client2, wav, &mut rec).await;
+                    rec.total_ms = t0.elapsed().as_millis() as u64;
+                    if let Err(e) = &result {
+                        rec.outcome = "failed".into();
+                        rec.error = Some(format!("{e:#}"));
+                    }
+                    if snapshot.history.enabled {
+                        record_history(&app2, &rec);
+                    }
                     finish(&app2, result);
                     busy2.store(false, Ordering::SeqCst);
                 });
@@ -557,47 +597,100 @@ fn pipeline_loop(
 }
 
 /// Returns `Ok(None)` when there was nothing worth pasting (no speech), so the caller stays quiet.
+/// Fills `rec` with each stage's input, output and timing as it goes, including on failure.
 async fn process(
     app: &AppHandle,
     cfg: &Config,
     client: &reqwest::Client,
     wav: Vec<u8>,
+    rec: &mut history::Record,
 ) -> anyhow::Result<Option<String>> {
     let t0 = Instant::now();
-    let raw = stt::transcribe(client, cfg, wav).await?;
+    rec.stt.base_url = cfg.stt().base_url.clone();
+    rec.stt.api = cfg.stt().api.clone();
+    rec.stt.model = cfg.stt().model.clone();
+    let transcribed = stt::transcribe_full(client, cfg, wav).await;
+    rec.stt.duration_ms = t0.elapsed().as_millis() as u64;
+    let raw = match transcribed {
+        Ok((text, response)) => {
+            rec.stt.text = text.clone();
+            rec.stt.response = Some(response);
+            text
+        }
+        Err(e) => {
+            rec.stt.error = Some(format!("{e:#}"));
+            return Err(e);
+        }
+    };
     log::info!("stt {:?}: {raw:?}", t0.elapsed());
     if !raw.chars().any(|c| c.is_alphanumeric()) {
         log::info!("no speech in transcript, skipping");
+        rec.outcome = "no_speech".into();
         return Ok(None);
     }
 
+    rec.llm.enabled = cfg.llm().enabled;
+    rec.llm.base_url = cfg.llm().base_url.clone();
+    rec.llm.model = cfg.llm().model.clone();
     let text = if cfg.llm().enabled {
         set_state(app, "processing", Some("Cleaning up…".into()));
         let t1 = Instant::now();
-        match llm::cleanup(client, cfg, &raw).await {
+        let mut trace = llm::Trace::default();
+        let cleaned = llm::cleanup_traced(client, cfg, &raw, &mut trace).await;
+        rec.llm.duration_ms = t1.elapsed().as_millis() as u64;
+        rec.llm.wire = trace.wire.map(|w| format!("{w:?}").to_ascii_lowercase());
+        rec.llm.prompt = trace.prompt;
+        rec.llm.reply = trace.reply;
+        match cleaned {
             Ok(clean) => {
                 log::info!("llm {:?}: {clean:?}", t1.elapsed());
+                rec.llm.cleaned = Some(clean.clone());
                 clean
             }
             Err(e) => {
                 log::warn!("cleanup failed, pasting raw transcript: {e:#}");
+                rec.llm.error = Some(format!("{e:#}"));
+                rec.llm.fell_back = true;
                 raw.clone()
             }
         }
     } else {
         raw.clone()
     };
+    rec.output.text = text.clone();
 
     if !text.chars().any(|c| c.is_alphanumeric()) {
         log::info!("cleanup produced no text, skipping");
+        rec.outcome = "empty_cleanup".into();
         return Ok(None);
     }
 
     set_state(app, "processing", Some("Pasting…".into()));
     let to_paste = text.clone();
-    tokio::task::spawn_blocking(move || inject::paste(&to_paste)).await??;
+    let t2 = Instant::now();
+    let pasted = tokio::task::spawn_blocking(move || inject::paste(&to_paste))
+        .await
+        .map_err(anyhow::Error::from)
+        .and_then(|r| r);
+    rec.output.paste_ms = t2.elapsed().as_millis() as u64;
+    if let Err(e) = pasted {
+        rec.output.paste_error = Some(format!("{e:#}"));
+        return Err(e);
+    }
+    rec.output.pasted = true;
+    rec.outcome = "pasted".into();
     log::info!("total {:?}", t0.elapsed());
     Ok(Some(text))
+}
+
+/// Appends the take to today's history file and lets an open Settings window refresh its list.
+fn record_history(app: &AppHandle, rec: &history::Record) {
+    match history::dir().and_then(|root| history::append(&root, rec)) {
+        Ok(()) => {
+            let _ = app.emit_to(SETTINGS, "history-changed", &rec.id);
+        }
+        Err(e) => log::warn!("could not write history: {e:#}"),
+    }
 }
 
 fn finish(app: &AppHandle, result: anyhow::Result<Option<String>>) {

@@ -41,12 +41,62 @@
       footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 6px; }
       code { background: #121216; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
       .hint { color: #7f7f8a; font-size: 11px; margin-top: 4px; }
+      .tabs { display: flex; gap: 4px; margin: 0 0 16px; border-bottom: 1px solid #2c2c34; }
+      .tabs button { background: transparent; border: 0; border-bottom: 2px solid transparent; border-radius: 0; padding: 7px 12px; color: #9a9aa5; }
+      .tabs button:hover { background: transparent; color: #e8e8ec; }
+      .tabs button.active { color: #e8e8ec; border-bottom-color: #7dd3fc; }
+      .hist-bar { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
+      .hist-bar select { width: auto; flex: none; }
+      .hist-bar input { flex: 1; }
+      .toggles { display: flex; gap: 16px; flex-wrap: wrap; }
+      .entry { background: #1f1f25; border: 1px solid #2c2c34; border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; }
+      .entry .meta { display: flex; gap: 8px; align-items: center; color: #9a9aa5; font-size: 11px; flex-wrap: wrap; }
+      .entry .meta .time { color: #e8e8ec; font-weight: 600; font-size: 12px; }
+      .badge { padding: 1px 6px; border-radius: 9px; font-size: 10px; font-weight: 600; background: #2a2a33; color: #b9b9c4; }
+      .badge.pasted { background: #173d2a; color: #3ddc84; }
+      .badge.failed { background: #3d1c1c; color: #ff8f8f; }
+      .badge.warn { background: #3d331a; color: #ffd166; }
+      .entry .text { margin: 8px 0 6px; white-space: pre-wrap; word-break: break-word; user-select: text; }
+      .entry .text.muted { color: #7f7f8a; font-style: italic; }
+      .entry .actions { display: flex; gap: 6px; flex-wrap: wrap; }
+      .entry .actions button { padding: 3px 8px; font-size: 11px; }
+      .entry details { margin-top: 6px; }
+      .entry summary { cursor: pointer; color: #9a9aa5; font-size: 11px; }
+      .stage { margin: 8px 0 0; }
+      .stage h3 { margin: 0 0 3px; font-size: 11px; color: #b9b9c4; text-transform: uppercase; letter-spacing: .04em; }
+      .stage pre { margin: 0; padding: 6px 8px; background: #121216; border-radius: 6px; white-space: pre-wrap; word-break: break-word; font: 11px/1.4 ui-monospace, Menlo, monospace; user-select: text; max-height: 220px; overflow: auto; }
+      .empty { color: #7f7f8a; text-align: center; padding: 30px 0; }
     </style>
   </head>
   <body>
     <main>
       <h1>stfu</h1>
       <p class="sub">Hold <code id="hotkey">Fn</code>, talk, release. Three short steps below; each is a minute's work.</p>
+
+      <nav class="tabs">
+        <button id="tab-btn-setup" class="active">Settings</button>
+        <button id="tab-btn-history">History</button>
+      </nav>
+
+      <div id="tab-history" hidden>
+        <section>
+          <div class="toggles">
+            <label class="toggle"><input type="checkbox" id="hist-enabled" /> Keep a history of every dictation</label>
+            <label class="toggle"><input type="checkbox" id="hist-audio" /> Keep the audio too</label>
+          </div>
+          <div class="hint">Stored only on this machine, one file per day: <code id="hist-path"></code>. Each line holds every stage: the audio, the raw transcript, what the clean-up model was sent and replied, and what was pasted where. Nothing is uploaded.</div>
+        </section>
+        <div class="hist-bar">
+          <select id="hist-day"></select>
+          <input id="hist-search" placeholder="Search this day" />
+          <button id="hist-folder" title="Open the history folder">Open folder</button>
+          <button id="hist-delete" title="Delete this day's history and audio">Delete day</button>
+        </div>
+        <div class="status" id="hist-status" style="margin:0 0 8px"></div>
+        <div id="hist-list"></div>
+      </div>
+
+      <div id="tab-setup">
 
       <section id="profile-bar">
         <h2>Profile</h2>
@@ -154,6 +204,7 @@
         <button class="primary" id="save">Save</button>
       </footer>
       <p class="hint">Keys are stored in <code id="cfgpath"></code>. Hotkey changes need an app restart.</p>
+      </div>
     </main>
     <script type="module" src="/src/settings.ts"></script>
   </body>

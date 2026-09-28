@@ -27,6 +27,15 @@ pub fn api_for(value: Option<&str>) -> SttApi {
 /// Sends a WAV to a transcription server: OpenAI-compatible by default, whisper.cpp's
 /// `/inference` when the profile says so. Both answer with `{"text": ...}`.
 pub async fn transcribe(client: &reqwest::Client, cfg: &Config, wav: Vec<u8>) -> Result<String> {
+    transcribe_full(client, cfg, wav).await.map(|(text, _)| text)
+}
+
+/// Like `transcribe`, but also hands back the server's whole JSON reply for the history.
+pub async fn transcribe_full(
+    client: &reqwest::Client,
+    cfg: &Config,
+    wav: Vec<u8>,
+) -> Result<(String, serde_json::Value)> {
     let key = cfg
         .stt_key()
         .context("no speech-to-text API key: set stt.api_key in config.json or STFU_STT_API_KEY")?;
@@ -65,9 +74,11 @@ pub async fn transcribe(client: &reqwest::Client, cfg: &Config, wav: Vec<u8>) ->
     if !status.is_success() {
         return Err(anyhow!("speech-to-text HTTP {status}: {}", body.chars().take(300).collect::<String>()));
     }
-    let parsed: TranscriptionResponse =
+    let raw: serde_json::Value =
         serde_json::from_str(&body).context("speech-to-text returned unexpected JSON")?;
-    Ok(parsed.text.trim().to_string())
+    let parsed: TranscriptionResponse =
+        serde_json::from_value(raw.clone()).context("speech-to-text returned unexpected JSON")?;
+    Ok((parsed.text.trim().to_string(), raw))
 }
 
 

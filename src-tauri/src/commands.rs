@@ -1,7 +1,7 @@
 //! Tauri commands used by the settings window.
 
 use crate::config::Config;
-use crate::{audio, lang, llm, stt, SharedConfig};
+use crate::{audio, history, lang, llm, stt, SharedConfig};
 use tauri::menu::{CheckMenuItem, Submenu};
 use tauri::{Emitter, State, Wry};
 
@@ -396,4 +396,69 @@ pub fn sync_profile_menu(menu: &ProfileMenu, cfg: &Config) {
         let _ = item.set_checked(checked);
     }
     let _ = menu.submenu.set_text(format!("Profile: {}", cfg.active_profile));
+}
+
+/// Days that have history, newest first, with how many dictations each holds.
+#[tauri::command]
+pub fn history_days() -> Result<Vec<history::Day>, String> {
+    history::dir().and_then(|root| history::days(&root)).map_err(|e| format!("{e:#}"))
+}
+
+/// Every record of one day (`YYYY-MM-DD`), newest first.
+#[tauri::command]
+pub fn history_entries(day: String) -> Result<Vec<serde_json::Value>, String> {
+    history::dir().and_then(|root| history::read_day(&root, &day)).map_err(|e| format!("{e:#}"))
+}
+
+/// A take's WAV, as raw bytes so the webview can play it without a JSON number array.
+#[tauri::command]
+pub fn history_audio(id: String) -> Result<tauri::ipc::Response, String> {
+    history::dir()
+        .and_then(|root| history::read_audio(&root, &id))
+        .map(tauri::ipc::Response::new)
+        .map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+pub fn history_delete_day(day: String) -> Result<(), String> {
+    history::dir().and_then(|root| history::delete_day(&root, &day)).map_err(|e| format!("{e:#}"))?;
+    log::info!("deleted history for {day}");
+    Ok(())
+}
+
+/// Opens the history folder in Finder / Explorer / the file manager. Always this one fixed path.
+#[tauri::command]
+pub fn history_open_folder() -> Result<(), String> {
+    let root = history::dir().map_err(|e| format!("{e:#}"))?;
+    std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+    #[cfg(target_os = "macos")]
+    let result = std::process::Command::new("open").arg(&root).spawn();
+    #[cfg(target_os = "windows")]
+    let result = std::process::Command::new("explorer").arg(&root).spawn();
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    let result = std::process::Command::new("xdg-open").arg(&root).spawn();
+    result.map(|_| ()).map_err(|e| e.to_string())
+}
+
+/// Turn history or audio keeping on or off without touching the rest of the form.
+#[tauri::command]
+pub fn history_settings(
+    state: State<'_, SharedConfig>,
+    enabled: bool,
+    save_audio: bool,
+) -> Result<String, String> {
+    let mut cfg = state.write().unwrap();
+    cfg.history.enabled = enabled;
+    cfg.history.save_audio = save_audio;
+    cfg.save().map_err(|e| format!("{e:#}"))?;
+    log::info!("history enabled={enabled} save_audio={save_audio}");
+    history::dir().map(|p| p.display().to_string()).map_err(|e| format!("{e:#}"))
+}
+
+/// Clipboard write from the native side: reliable in every webview, unlike navigator.clipboard.
+#[tauri::command]
+pub fn copy_text(text: String) -> Result<(), String> {
+    arboard::Clipboard::new()
+        .and_then(|mut c| c.set_text(text))
+        .map_err(|e| format!("could not copy: {e}"))
 }

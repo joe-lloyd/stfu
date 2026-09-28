@@ -80,6 +80,25 @@ pub struct Config {
     /// Check GitHub for a newer release in the background and install it.
     #[serde(default = "default_true")]
     pub auto_update: bool,
+    /// Local dictation history (see history.rs). Never leaves the machine.
+    #[serde(default)]
+    pub history: HistoryConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HistoryConfig {
+    /// Write every dictation, with each stage's input and output, to a daily file.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Keep each take's audio next to it (about 32 KB per second of speech).
+    #[serde(default = "default_true")]
+    pub save_audio: bool,
+}
+
+impl Default for HistoryConfig {
+    fn default() -> Self {
+        Self { enabled: true, save_audio: true }
+    }
 }
 
 fn default_true() -> bool {
@@ -149,6 +168,7 @@ impl Default for Config {
             llm: None,
             launch_at_login: true,
             auto_update: true,
+            history: HistoryConfig::default(),
         }
     }
 }
