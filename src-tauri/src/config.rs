@@ -93,11 +93,41 @@ pub struct HistoryConfig {
     /// Keep each take's audio next to it (about 32 KB per second of speech).
     #[serde(default = "default_true")]
     pub save_audio: bool,
+    /// Days of history to keep; older days are removed entirely. 0 = keep forever.
+    #[serde(default = "default_keep_days")]
+    pub keep_days: u32,
+    /// Size cap for the history folder in MB; over it, the oldest recordings go first. 0 = no cap.
+    #[serde(default = "default_max_mb")]
+    pub max_mb: u64,
+    /// Ask in Settings before deleting anything, instead of cleaning up automatically.
+    #[serde(default = "default_true")]
+    pub confirm_cleanup: bool,
+}
+
+fn default_keep_days() -> u32 {
+    30
+}
+
+/// About four and a half hours of speech.
+fn default_max_mb() -> u64 {
+    500
 }
 
 impl Default for HistoryConfig {
     fn default() -> Self {
-        Self { enabled: true, save_audio: true }
+        Self {
+            enabled: true,
+            save_audio: true,
+            keep_days: default_keep_days(),
+            max_mb: default_max_mb(),
+            confirm_cleanup: true,
+        }
+    }
+}
+
+impl HistoryConfig {
+    pub fn limits(&self) -> crate::history::Limits {
+        crate::history::Limits { keep_days: self.keep_days, max_bytes: self.max_mb * 1024 * 1024 }
     }
 }
 

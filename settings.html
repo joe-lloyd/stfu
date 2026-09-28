@@ -65,6 +65,16 @@
       .stage { margin: 8px 0 0; }
       .stage h3 { margin: 0 0 3px; font-size: 11px; color: #b9b9c4; text-transform: uppercase; letter-spacing: .04em; }
       .stage pre { margin: 0; padding: 6px 8px; background: #121216; border-radius: 6px; white-space: pre-wrap; word-break: break-word; font: 11px/1.4 ui-monospace, Menlo, monospace; user-select: text; max-height: 220px; overflow: auto; }
+      .meter { height: 6px; background: #121216; border-radius: 3px; overflow: hidden; margin: 6px 0 2px; }
+      .meter > div { height: 100%; background: #7dd3fc; width: 0; }
+      .meter.warn > div { background: #ffd166; }
+      .meter.over > div { background: #ff6b6b; }
+      .limits { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; margin-top: 4px; }
+      .limits label { margin: 6px 0 4px; }
+      .limits input[type=number] { width: 90px; }
+      .banner { border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; font-size: 12px; background: #3d331a; color: #ffe29a; border: 1px solid #5c4b1f; }
+      .banner.over { background: #3d1c1c; color: #ffc4c4; border-color: #5c2a2a; }
+      .banner .row { margin-top: 8px; }
       .empty { color: #7f7f8a; text-align: center; padding: 30px 0; }
     </style>
   </head>
@@ -86,6 +96,30 @@
           </div>
           <div class="hint">Stored only on this machine, one file per day: <code id="hist-path"></code>. Each line holds every stage: the audio, the raw transcript, what the clean-up model was sent and replied, and what was pasted where. Nothing is uploaded.</div>
         </section>
+
+        <section>
+          <h2>Storage <span class="hint" id="hist-usage" style="font-weight:400"></span></h2>
+          <div class="meter" id="hist-meter"><div></div></div>
+          <div class="limits">
+            <div>
+              <label for="hist-days">Keep for (days)</label>
+              <input id="hist-days" type="number" min="0" step="1" />
+            </div>
+            <div>
+              <label for="hist-max">Size limit (MB)</label>
+              <input id="hist-max" type="number" min="0" step="50" />
+            </div>
+            <label class="toggle" style="flex:1"><input type="checkbox" id="hist-confirm" /> Ask me before deleting anything</label>
+          </div>
+          <div class="hint">0 means no limit. Days older than the limit are removed entirely. Over the size limit, the oldest recordings go first and their transcripts stay, since audio is nearly all of the space. You get a warning at 80% of the size limit. With "ask me" on, nothing is ever deleted until you confirm here; off, cleanup runs by itself after each dictation.</div>
+        </section>
+
+        <div class="banner" id="hist-banner" hidden>
+          <div id="hist-banner-text"></div>
+          <div class="row" id="hist-banner-actions">
+            <button class="primary" id="hist-cleanup">Clean up now</button>
+          </div>
+        </div>
         <div class="hist-bar">
           <select id="hist-day"></select>
           <input id="hist-search" placeholder="Search this day" />

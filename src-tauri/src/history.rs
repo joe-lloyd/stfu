@@ -259,6 +259,167 @@ pub fn delete_day(root: &Path, day: &str) -> Result<()> {
     Ok(())
 }
 
+/// Retention limits, from config. Zero means "no limit" for either.
+#[derive(Debug, Clone, Copy)]
+pub struct Limits {
+    pub keep_days: u32,
+    pub max_bytes: u64,
+}
+
+/// Warn once usage passes this share of the size limit, before anything needs deleting.
+pub const WARN_AT: f64 = 0.8;
+
+#[derive(Debug, Default, Serialize, PartialEq)]
+pub struct Usage {
+    pub total_bytes: u64,
+    pub audio_bytes: u64,
+    pub text_bytes: u64,
+    pub days: usize,
+    pub oldest_day: Option<String>,
+}
+
+/// What a cleanup would delete. Built without touching anything, so it can be shown to the user
+/// and confirmed before it runs.
+#[derive(Debug, Default, Serialize, PartialEq)]
+pub struct Plan {
+    /// Whole days past `keep_days`: transcript, result and audio all go.
+    pub expired_days: Vec<String>,
+    /// Days whose audio goes to get back under the size limit; their text stays.
+    pub audio_days: Vec<String>,
+    pub frees_bytes: u64,
+}
+
+impl Plan {
+    pub fn is_empty(&self) -> bool {
+        self.expired_days.is_empty() && self.audio_days.is_empty()
+    }
+}
+
+fn dir_size(path: &Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir(path) else { return 0 };
+    entries
+        .filter_map(|e| e.ok())
+        .map(|e| match e.metadata() {
+            Ok(m) if m.is_dir() => dir_size(&e.path()),
+            Ok(m) => m.len(),
+            Err(_) => 0,
+        })
+        .sum()
+}
+
+/// Per-day sizes, oldest first: (day, text bytes, audio bytes).
+fn day_sizes(root: &Path) -> Vec<(String, u64, u64)> {
+    let mut map = std::collections::BTreeMap::<String, (u64, u64)>::new();
+    if let Ok(entries) = std::fs::read_dir(root) {
+        for e in entries.filter_map(|e| e.ok()) {
+            let Ok(name) = e.file_name().into_string() else { continue };
+            let Some(day) = name.strip_suffix(".jsonl") else { continue };
+            if check_day(day).is_ok() {
+                map.entry(day.to_string()).or_default().0 = e.metadata().map(|m| m.len()).unwrap_or(0);
+            }
+        }
+    }
+    if let Ok(entries) = std::fs::read_dir(root.join("audio")) {
+        for e in entries.filter_map(|e| e.ok()) {
+            let Ok(day) = e.file_name().into_string() else { continue };
+            if check_day(&day).is_ok() {
+                map.entry(day).or_default().1 = dir_size(&e.path());
+            }
+        }
+    }
+    map.into_iter().map(|(d, (t, a))| (d, t, a)).collect()
+}
+
+pub fn usage(root: &Path) -> Usage {
+    let sizes = day_sizes(root);
+    let text_bytes = sizes.iter().map(|s| s.1).sum();
+    let audio_bytes = sizes.iter().map(|s| s.2).sum();
+    Usage {
+        total_bytes: text_bytes + audio_bytes,
+        audio_bytes,
+        text_bytes,
+        days: sizes.len(),
+        oldest_day: sizes.first().map(|s| s.0.clone()),
+    }
+}
+
+/// Decides what to delete. Age first: days older than `keep_days` go entirely. Then size: if
+/// still over `max_bytes`, drop the oldest days' audio, because audio is nearly all of the space
+/// and a transcript costs a couple of KB. Only if text alone is over the limit do the oldest
+/// whole days go too. Today is never touched.
+pub fn plan(root: &Path, limits: Limits, today: &str) -> Plan {
+    let sizes = day_sizes(root);
+    let mut plan = Plan::default();
+    let cutoff = (limits.keep_days > 0)
+        .then(|| chrono::NaiveDate::parse_from_str(today, "%Y-%m-%d").ok())
+        .flatten()
+        .map(|t| (t - chrono::Duration::days(limits.keep_days as i64)).format("%Y-%m-%d").to_string());
+
+    let mut remaining = Vec::new();
+    for (day, text, audio) in sizes {
+        if cutoff.as_deref().is_some_and(|c| day.as_str() < c) && day != today {
+            plan.frees_bytes += text + audio;
+            plan.expired_days.push(day);
+        } else {
+            remaining.push((day, text, audio));
+        }
+    }
+
+    if limits.max_bytes > 0 {
+        let mut total: u64 = remaining.iter().map(|s| s.1 + s.2).sum();
+        for (day, _, audio) in remaining.iter() {
+            if total <= limits.max_bytes {
+                break;
+            }
+            if *audio > 0 && day != today {
+                total -= audio;
+                plan.frees_bytes += audio;
+                plan.audio_days.push(day.clone());
+            }
+        }
+        for (day, text, audio) in remaining.iter() {
+            if total <= limits.max_bytes {
+                break;
+            }
+            if day != today && !plan.expired_days.contains(day) {
+                let already = if plan.audio_days.contains(day) { 0 } else { *audio };
+                total -= text + already;
+                plan.frees_bytes += text + already;
+                plan.audio_days.retain(|d| d != day);
+                plan.expired_days.push(day.clone());
+            }
+        }
+    }
+    plan
+}
+
+/// Carries out a plan. Everything it names is re-validated as a plain `YYYY-MM-DD`.
+pub fn apply(root: &Path, plan: &Plan) -> Result<()> {
+    for day in &plan.expired_days {
+        delete_day(root, day)?;
+    }
+    for day in &plan.audio_days {
+        check_day(day)?;
+        let audio = root.join("audio").join(day);
+        if audio.exists() {
+            std::fs::remove_dir_all(&audio).with_context(|| format!("deleting {}", audio.display()))?;
+        }
+    }
+    if !plan.is_empty() {
+        log::info!(
+            "history cleanup: {} day(s) removed, audio removed from {} day(s), {} KB freed",
+            plan.expired_days.len(),
+            plan.audio_days.len(),
+            plan.frees_bytes / 1024
+        );
+    }
+    Ok(())
+}
+
+pub fn today() -> String {
+    chrono::Local::now().format("%Y-%m-%d").to_string()
+}
+
 /// Length of a 16-bit PCM WAV from its header.
 pub fn wav_duration_ms(wav: &[u8]) -> u64 {
     if wav.len() < 44 {
@@ -366,6 +527,63 @@ mod tests {
         if let Some(app) = frontmost_app() {
             assert!(!app.name.is_empty());
         }
+    }
+
+    /// Writes a day with `text` bytes of history and `audio` bytes of recordings.
+    fn seed(root: &Path, day: &str, text: usize, audio: usize) {
+        create_private_dir(root).unwrap();
+        std::fs::write(root.join(format!("{day}.jsonl")), vec![b'x'; text]).unwrap();
+        if audio > 0 {
+            let dir = root.join("audio").join(day);
+            create_private_dir(&dir).unwrap();
+            std::fs::write(dir.join("a.wav"), vec![0u8; audio]).unwrap();
+        }
+    }
+
+    #[test]
+    fn days_past_the_age_limit_go_entirely() {
+        let root = temp_root("age");
+        seed(&root, "2026-08-01", 10, 100);
+        seed(&root, "2026-09-20", 10, 100);
+        seed(&root, "2026-09-28", 10, 100);
+        let p = plan(&root, Limits { keep_days: 30, max_bytes: 0 }, "2026-09-28");
+        assert_eq!(p.expired_days, vec!["2026-08-01"]);
+        assert!(p.audio_days.is_empty());
+        assert_eq!(p.frees_bytes, 110);
+
+        apply(&root, &p).unwrap();
+        assert_eq!(usage(&root).days, 2);
+        assert_eq!(usage(&root).oldest_day.as_deref(), Some("2026-09-20"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn over_the_size_limit_the_oldest_audio_goes_first_and_text_stays() {
+        let root = temp_root("size");
+        seed(&root, "2026-09-26", 10, 500);
+        seed(&root, "2026-09-27", 10, 500);
+        seed(&root, "2026-09-28", 10, 500);
+        let p = plan(&root, Limits { keep_days: 0, max_bytes: 1100 }, "2026-09-28");
+        assert!(p.expired_days.is_empty(), "transcripts are kept");
+        assert_eq!(p.audio_days, vec!["2026-09-26"]);
+        assert_eq!(p.frees_bytes, 500);
+
+        apply(&root, &p).unwrap();
+        let u = usage(&root);
+        assert_eq!(u.days, 3);
+        assert_eq!(u.audio_bytes, 1000);
+        assert!(plan(&root, Limits { keep_days: 0, max_bytes: 1100 }, "2026-09-28").is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn today_is_never_deleted_and_no_limits_means_nothing_to_do() {
+        let root = temp_root("today");
+        seed(&root, "2026-09-28", 10, 5000);
+        assert!(plan(&root, Limits { keep_days: 1, max_bytes: 100 }, "2026-09-28").is_empty());
+        seed(&root, "2020-01-01", 10, 5000);
+        assert!(plan(&root, Limits { keep_days: 0, max_bytes: 0 }, "2026-09-28").is_empty());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

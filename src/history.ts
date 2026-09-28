@@ -21,6 +21,10 @@ interface Rec {
   total_ms?: number;
 }
 interface Day { day: string; count: number }
+export interface HistoryConfig { enabled: boolean; save_audio: boolean; keep_days: number; max_mb: number; confirm_cleanup: boolean }
+interface Usage { total_bytes: number; audio_bytes: number; text_bytes: number; days: number; oldest_day: string | null }
+interface Plan { expired_days: string[]; audio_days: string[]; frees_bytes: number }
+interface Status { path: string; usage: Usage; plan: Plan; near_limit: boolean }
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -234,12 +238,110 @@ async function loadDays(keep = true) {
   await loadEntries();
 }
 
-async function saveToggles() {
-  const enabled = $<HTMLInputElement>("hist-enabled").checked;
-  $<HTMLInputElement>("hist-audio").disabled = !enabled;
+const DEFAULTS: HistoryConfig = { enabled: true, save_audio: true, keep_days: 30, max_mb: 500, confirm_cleanup: true };
+
+/** Fill the History tab's controls from the config. */
+export function applyHistoryConfig(h: Partial<HistoryConfig> | undefined) {
+  const c = { ...DEFAULTS, ...h };
+  $<HTMLInputElement>("hist-enabled").checked = c.enabled;
+  $<HTMLInputElement>("hist-audio").checked = c.save_audio;
+  $<HTMLInputElement>("hist-audio").disabled = !c.enabled;
+  $<HTMLInputElement>("hist-days").value = String(c.keep_days);
+  $<HTMLInputElement>("hist-max").value = String(c.max_mb);
+  $<HTMLInputElement>("hist-confirm").checked = c.confirm_cleanup;
+}
+
+/** The History tab's controls as config; the main Save carries these through unchanged. */
+export function historyOptions(): HistoryConfig {
+  const num = (id: string, fallback: number) => {
+    const n = Math.floor(Number($<HTMLInputElement>(id).value));
+    return Number.isFinite(n) && n >= 0 ? n : fallback;
+  };
+  return {
+    enabled: $<HTMLInputElement>("hist-enabled").checked,
+    save_audio: $<HTMLInputElement>("hist-audio").checked,
+    keep_days: num("hist-days", DEFAULTS.keep_days),
+    max_mb: num("hist-max", DEFAULTS.max_mb),
+    confirm_cleanup: $<HTMLInputElement>("hist-confirm").checked,
+  };
+}
+
+const mb = (bytes: number) => (bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(bytes < 100 * 1024 * 1024 ? 1 : 0)} MB`);
+let current: Status | null = null;
+
+/** Describe a cleanup in plain words, for the banner and the confirm dialog. */
+function describe(plan: Plan, opts: HistoryConfig): string {
+  const parts: string[] = [];
+  if (plan.expired_days.length) {
+    const n = plan.expired_days.length;
+    parts.push(`${n} day${n > 1 ? "s" : ""} older than ${opts.keep_days} days (transcripts, results and audio, ${plan.expired_days[0]}${n > 1 ? ` to ${plan.expired_days[n - 1]}` : ""})`);
+  }
+  if (plan.audio_days.length) {
+    const n = plan.audio_days.length;
+    parts.push(`the recordings from the ${n > 1 ? `${n} oldest days` : "oldest day"} (their transcripts stay)`);
+  }
+  return `${parts.join(" and ")}, freeing ${mb(plan.frees_bytes)}`;
+}
+
+function renderStatus(st: Status) {
+  current = st;
+  const opts = historyOptions();
+  const limit = opts.max_mb * 1024 * 1024;
+  const u = st.usage;
+  $("hist-path").textContent = st.path;
+  $("hist-usage").textContent =
+    `${mb(u.total_bytes)}${limit ? ` of ${opts.max_mb} MB` : ""} · ${mb(u.audio_bytes)} audio, ${mb(u.text_bytes)} text · ${u.days} day${u.days === 1 ? "" : "s"}` +
+    (u.oldest_day ? ` since ${u.oldest_day}` : "");
+  const meter = $("hist-meter");
+  const share = limit ? u.total_bytes / limit : 0;
+  (meter.firstElementChild as HTMLElement).style.width = `${Math.min(100, share * 100)}%`;
+  meter.hidden = !limit;
+  meter.className = `meter ${share >= 1 ? "over" : st.near_limit ? "warn" : ""}`;
+
+  const banner = $("hist-banner");
+  const pending = st.plan.expired_days.length + st.plan.audio_days.length > 0;
+  $("hist-banner-actions").hidden = !pending;
+  if (pending) {
+    banner.className = `banner ${share >= 1 ? "over" : ""}`;
+    $("hist-banner-text").textContent = opts.confirm_cleanup
+      ? `History is past its limits. Waiting for your OK to delete ${describe(st.plan, opts)}.`
+      : `History is past its limits. The next cleanup deletes ${describe(st.plan, opts)}.`;
+  } else if (st.near_limit) {
+    banner.className = "banner";
+    $("hist-banner-text").textContent =
+      `History is at ${Math.round(share * 100)}% of its ${opts.max_mb} MB limit. Past it, the oldest recordings ${opts.confirm_cleanup ? "will be offered for deletion" : "are deleted automatically"}; raise the limit or turn off "Keep the audio too" to avoid that.`;
+  }
+  banner.hidden = !pending && !st.near_limit;
+}
+
+async function refreshStatus() {
   try {
-    await invoke("history_settings", { enabled, saveAudio: $<HTMLInputElement>("hist-audio").checked });
-    status(enabled ? "History is on." : "History is off. Nothing new will be written; existing files stay until you delete them.", "ok");
+    renderStatus(await invoke<Status>("history_status"));
+  } catch (e) {
+    status(String(e), "err");
+  }
+}
+
+async function saveOptions() {
+  const opts = historyOptions();
+  $<HTMLInputElement>("hist-audio").disabled = !opts.enabled;
+  try {
+    renderStatus(await invoke<Status>("history_settings", { history: opts }));
+    status(opts.enabled ? "Saved." : "History is off. Nothing new will be written; existing files stay until you delete them.", "ok");
+  } catch (e) {
+    status(String(e), "err");
+  }
+}
+
+async function cleanupNow() {
+  if (!current) return;
+  const opts = historyOptions();
+  if (!confirm(`Delete ${describe(current.plan, opts)}? This cannot be undone.`)) return;
+  try {
+    const st = await invoke<Status>("history_cleanup");
+    status(`Cleaned up, ${mb(current.plan.frees_bytes)} freed.`, "ok");
+    renderStatus(st);
+    await loadDays(true);
   } catch (e) {
     status(String(e), "err");
   }
@@ -251,19 +353,18 @@ let loaded = false;
 export async function showHistory() {
   if (!loaded) {
     loaded = true;
-    const cfg = await invoke<{ history?: { enabled: boolean; save_audio: boolean } }>("get_config");
-    $<HTMLInputElement>("hist-enabled").checked = cfg.history?.enabled ?? true;
-    $<HTMLInputElement>("hist-audio").checked = cfg.history?.save_audio ?? true;
-    $<HTMLInputElement>("hist-audio").disabled = !(cfg.history?.enabled ?? true);
-    $("hist-path").textContent = (await invoke<string>("config_path")).replace(/config\.json$/, "history");
+    const cfg = await invoke<{ history?: HistoryConfig }>("get_config");
+    applyHistoryConfig(cfg.history);
   }
-  await loadDays(false);
+  await Promise.all([loadDays(false), refreshStatus()]);
 }
 
 $("hist-day").addEventListener("change", () => void loadEntries());
 $("hist-search").addEventListener("input", render);
-$("hist-enabled").addEventListener("change", () => void saveToggles());
-$("hist-audio").addEventListener("change", () => void saveToggles());
+for (const id of ["hist-enabled", "hist-audio", "hist-days", "hist-max", "hist-confirm"]) {
+  $(id).addEventListener("change", () => void saveOptions());
+}
+$("hist-cleanup").addEventListener("click", () => void cleanupNow());
 $("hist-folder").addEventListener("click", () => invoke("history_open_folder").catch((e) => status(String(e), "err")));
 $("hist-delete").addEventListener("click", async () => {
   const day = $<HTMLSelectElement>("hist-day").value;
@@ -271,7 +372,7 @@ $("hist-delete").addEventListener("click", async () => {
   try {
     await invoke("history_delete_day", { day });
     status(`Deleted ${day}.`, "ok");
-    await loadDays(false);
+    await Promise.all([loadDays(false), refreshStatus()]);
   } catch (e) {
     status(String(e), "err");
   }
@@ -283,4 +384,5 @@ listen("history-changed", () => {
   const sel = $<HTMLSelectElement>("hist-day");
   if (!sel.value || sel.value === today()) void loadDays(false);
   else void loadDays(true);
+  void refreshStatus();
 });

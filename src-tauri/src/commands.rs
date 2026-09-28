@@ -440,19 +440,72 @@ pub fn history_open_folder() -> Result<(), String> {
     result.map(|_| ()).map_err(|e| e.to_string())
 }
 
-/// Turn history or audio keeping on or off without touching the rest of the form.
+/// Save the History tab's options (on/off, audio, retention) without touching the rest of the form.
+/// Returns the new status, since changing a limit changes what a cleanup would do.
 #[tauri::command]
 pub fn history_settings(
     state: State<'_, SharedConfig>,
-    enabled: bool,
-    save_audio: bool,
-) -> Result<String, String> {
+    history: crate::config::HistoryConfig,
+) -> Result<HistoryStatus, String> {
     let mut cfg = state.write().unwrap();
-    cfg.history.enabled = enabled;
-    cfg.history.save_audio = save_audio;
+    cfg.history = history;
     cfg.save().map_err(|e| format!("{e:#}"))?;
-    log::info!("history enabled={enabled} save_audio={save_audio}");
-    history::dir().map(|p| p.display().to_string()).map_err(|e| format!("{e:#}"))
+    log::info!("history settings: {:?}", cfg.history);
+    let h = cfg.history.clone();
+    drop(cfg);
+    status_for(&h)
+}
+
+#[derive(serde::Serialize)]
+pub struct HistoryStatus {
+    pub path: String,
+    pub usage: history::Usage,
+    /// What a cleanup would delete right now under the current limits.
+    pub plan: history::Plan,
+    /// Past the warning share of the size cap.
+    pub near_limit: bool,
+}
+
+fn status_for(h: &crate::config::HistoryConfig) -> Result<HistoryStatus, String> {
+    let root = history::dir().map_err(|e| format!("{e:#}"))?;
+    let usage = history::usage(&root);
+    let limits = h.limits();
+    let near_limit =
+        limits.max_bytes > 0 && usage.total_bytes as f64 >= limits.max_bytes as f64 * history::WARN_AT;
+    Ok(HistoryStatus {
+        path: root.display().to_string(),
+        plan: history::plan(&root, limits, &history::today()),
+        usage,
+        near_limit,
+    })
+}
+
+/// Disk use, and whether the limits call for a cleanup, for the History tab's warning.
+#[tauri::command]
+pub fn history_status(state: State<'_, SharedConfig>) -> Result<HistoryStatus, String> {
+    let h = state.read().unwrap().history.clone();
+    status_for(&h)
+}
+
+/// Run the cleanup the user just confirmed. The plan is rebuilt here rather than taken from the
+/// webview, so only what the current limits allow can ever be deleted.
+#[tauri::command]
+pub fn history_cleanup(state: State<'_, SharedConfig>) -> Result<HistoryStatus, String> {
+    let h = state.read().unwrap().history.clone();
+    let root = history::dir().map_err(|e| format!("{e:#}"))?;
+    let plan = history::plan(&root, h.limits(), &history::today());
+    history::apply(&root, &plan).map_err(|e| format!("{e:#}"))?;
+    status_for(&h)
+}
+
+/// Set at launch when history is over its limits and cleanup waits for the user, so Settings
+/// opens on the History tab. A flag rather than an event: the page may not be listening yet.
+#[derive(Default)]
+pub struct HistoryPrompt(pub std::sync::atomic::AtomicBool);
+
+#[tauri::command]
+pub fn take_history_prompt(prompt: State<'_, HistoryPrompt>) -> bool {
+    prompt.0.swap(false, std::sync::atomic::Ordering::SeqCst)
 }
 
 /// Clipboard write from the native side: reliable in every webview, unlike navigator.clipboard.

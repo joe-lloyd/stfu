@@ -214,6 +214,7 @@ pub fn run() {
             None,
         ))
         .manage(shared.clone())
+        .manage(commands::HistoryPrompt::default())
         .invoke_handler(tauri::generate_handler![
             commands::get_config,
             commands::config_path,
@@ -237,6 +238,9 @@ pub fn run() {
             commands::history_delete_day,
             commands::history_open_folder,
             commands::history_settings,
+            commands::history_status,
+            commands::history_cleanup,
+            commands::take_history_prompt,
             commands::copy_text,
         ])
         .on_window_event(|window, event| {
@@ -450,6 +454,11 @@ pub fn run() {
             let permissions_ok = input_monitoring;
             if config.needs_setup() || !permissions_ok {
                 show_settings(&app.handle().clone());
+            } else if maintain_history(app.handle(), &config.history) {
+                // Old or excess history is waiting for a yes: ask once per launch, on the History tab.
+                log::info!("history is over its limits; asking before cleaning up");
+                app.state::<commands::HistoryPrompt>().0.store(true, Ordering::SeqCst);
+                show_settings(&app.handle().clone());
             }
 
             // Global hotkey listener.
@@ -589,6 +598,7 @@ fn pipeline_loop(
                         record_history(&app2, &rec);
                     }
                     finish(&app2, result);
+                    maintain_history(&app2, &snapshot.history);
                     busy2.store(false, Ordering::SeqCst);
                 });
             }
@@ -681,6 +691,28 @@ async fn process(
     rec.outcome = "pasted".into();
     log::info!("total {:?}", t0.elapsed());
     Ok(Some(text))
+}
+
+/// Keeps the history inside its limits. Automatic mode deletes straight away; confirm mode (the
+/// default) only raises the question in Settings, and never deletes on its own.
+/// Returns true when something is waiting for the user's go-ahead.
+fn maintain_history(app: &AppHandle, h: &config::HistoryConfig) -> bool {
+    let Ok(root) = history::dir() else { return false };
+    let plan = history::plan(&root, h.limits(), &history::today());
+    if plan.is_empty() {
+        return false;
+    }
+    if h.confirm_cleanup {
+        let _ = app.emit_to(SETTINGS, "history-changed", ());
+        return true;
+    }
+    match history::apply(&root, &plan) {
+        Ok(()) => {
+            let _ = app.emit_to(SETTINGS, "history-changed", ());
+        }
+        Err(e) => log::warn!("history cleanup failed: {e:#}"),
+    }
+    false
 }
 
 /// Appends the take to today's history file and lets an open Settings window refresh its list.

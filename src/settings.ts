@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { showHistory } from "./history";
+import { applyHistoryConfig, historyOptions, showHistory, type HistoryConfig } from "./history";
 
 interface SttConfig { base_url: string; api: string | null; model: string; api_key: string; language: string }
 interface LlmConfig { enabled: boolean; base_url: string; model: string; api_key: string; timeout_secs: number; wire: string | null }
@@ -11,7 +11,7 @@ interface Config {
   profiles: Profile[];
   launch_at_login: boolean;
   auto_update: boolean;
-  history: { enabled: boolean; save_audio: boolean };
+  history: HistoryConfig;
 }
 interface LocalStatus { ollama_up: boolean; ollama_models: string[]; whisper_up: boolean }
 
@@ -193,10 +193,7 @@ function collect(): Config {
     launch_at_login: cfg.launch_at_login,
     auto_update: $<HTMLInputElement>("auto-update").checked,
     // Owned by the History tab, which saves it on its own; carry the live values through.
-    history: {
-      enabled: $<HTMLInputElement>("hist-enabled").checked,
-      save_audio: $<HTMLInputElement>("hist-audio").checked,
-    },
+    history: historyOptions(),
   };
 }
 
@@ -305,14 +302,15 @@ async function load() {
   $("cfgpath").textContent = await invoke<string>("config_path");
   $("hotkey").textContent = cfg.hotkey.join(" + ");
   $<HTMLInputElement>("auto-update").checked = cfg.auto_update ?? true;
-  $<HTMLInputElement>("hist-enabled").checked = cfg.history?.enabled ?? true;
-  $<HTMLInputElement>("hist-audio").checked = cfg.history?.save_audio ?? true;
+  applyHistoryConfig(cfg.history);
   $("app-version").textContent = `version ${await invoke<string>("app_version")}`;
 
   editing = cfg.active_profile || cfg.profiles[0].name;
   renderProfileList();
   showProfile(editing);
   void renderPermissions();
+  // Launched over the history limits with "ask me" on: this is where the question gets asked.
+  if (await invoke<boolean>("take_history_prompt")) showTab("history");
 
   const p = profileByName(editing);
   if (!p.stt.api_key) setStatus("stt-status", "No key yet. Click “Get a key”, paste it here, then Test.");
