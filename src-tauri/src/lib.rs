@@ -101,6 +101,42 @@ fn pill_origin(screen: Rect, pill_w: f64, pill_h: f64, lift: f64) -> (f64, f64) 
     )
 }
 
+/// Puts the pill in front of the user, on the screen they are working on.
+///
+/// On Windows the pill window is never hidden after startup, only parked off-screen (see
+/// `hide_pill`), so here it just moves into place; `show` is a no-op for a visible window.
+fn show_pill(win: &WebviewWindow) {
+    position_pill(win);
+    if let Err(e) = win.show() {
+        log::error!("could not show the pill: {e}");
+    }
+}
+
+/// Takes the pill away.
+///
+/// WebView2 stops compositing a hidden window, and the pill is a transparent window, so after a
+/// hide/show on Windows it could come back as an invisible, never-repainted surface: the hotkey
+/// worked but there was no pill. Parking it off every screen keeps the webview live instead.
+fn hide_pill(win: &WebviewWindow) {
+    #[cfg(target_os = "windows")]
+    {
+        let monitors = win.available_monitors().unwrap_or_default();
+        let (x, y) = park_origin(monitors.iter().map(|m| (m.position().x, m.position().y)));
+        if let Err(e) = win.set_position(PhysicalPosition::new(x, y)) {
+            log::error!("could not park the pill: {e}");
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    let _ = win.hide();
+}
+
+/// A spot left of and above every monitor, so a parked pill is on no screen at all.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn park_origin(monitor_origins: impl Iterator<Item = (i32, i32)>) -> (i32, i32) {
+    let (x, y) = monitor_origins.fold((0, 0), |(x, y), (mx, my)| (x.min(mx), y.min(my)));
+    (x - 4000, y - 4000)
+}
+
 /// Bottom-centre of the monitor the mouse is on, so the pill shows up where the user is working.
 /// Falls back to the primary monitor when the cursor cannot be read (e.g. Wayland).
 fn position_pill(win: &WebviewWindow) {
@@ -461,6 +497,16 @@ pub fn run() {
                 show_settings(&app.handle().clone());
             }
 
+            // Windows: show the pill once, parked off-screen, so WebView2 composites it from the
+            // start and it only ever moves after this (see hide_pill).
+            #[cfg(target_os = "windows")]
+            if let Some(win) = pill(app.handle()) {
+                hide_pill(&win);
+                if let Err(e) = win.show() {
+                    log::error!("could not show the parked pill: {e}");
+                }
+            }
+
             // Global hotkey listener.
             let keys = config
                 .hotkey
@@ -514,8 +560,7 @@ fn pipeline_loop(
                         take = history::new_record();
                         take.target_app = history::frontmost_app();
                         if let Some(win) = pill(&app) {
-                            position_pill(&win);
-                            let _ = win.show();
+                            show_pill(&win);
                         }
                         set_state(&app, "recording", None);
                         let app2 = app.clone();
@@ -544,7 +589,7 @@ fn pipeline_loop(
                 // Taps shorter than this are almost always accidental.
                 if held < Duration::from_millis(300) {
                     if let Some(win) = pill(&app) {
-                        let _ = win.hide();
+                        hide_pill(&win);
                     }
                     continue;
                 }
@@ -552,7 +597,7 @@ fn pipeline_loop(
                     Ok(w) if w.is_empty() => {
                         // Nothing usable was recorded: hide the pill, no error.
                         if let Some(win) = pill(&app) {
-                            let _ = win.hide();
+                            hide_pill(&win);
                         }
                         continue;
                     }
@@ -743,7 +788,7 @@ fn finish(app: &AppHandle, result: anyhow::Result<Option<String>>) {
     std::thread::spawn(move || {
         std::thread::sleep(hide_after);
         if let Some(win) = pill(&app) {
-            let _ = win.hide();
+            hide_pill(&win);
         }
     });
 }
@@ -765,6 +810,14 @@ mod tests {
         assert!(RIGHT.contains(1512.0, 10.0));
         assert!(ABOVE.contains(100.0, -1.0));
         assert!(!LAPTOP.contains(100.0, -1.0));
+    }
+
+    #[test]
+    fn parked_pill_is_off_every_screen() {
+        assert_eq!(park_origin([(0, 0)].into_iter()), (-4000, -4000));
+        // A monitor left of and above the primary pushes the parking spot further out.
+        assert_eq!(park_origin([(0, 0), (-2560, -1440), (3840, 0)].into_iter()), (-6560, -5440));
+        assert_eq!(park_origin(std::iter::empty()), (-4000, -4000));
     }
 
     #[test]

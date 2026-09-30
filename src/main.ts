@@ -97,7 +97,15 @@ listen<StateEvent>("state", (e) => {
   phase = next;
   pill.className = phase;
   msg.textContent = phase === "error" ? (e.payload.message ?? "Something went wrong") : "";
-  if (phase === "recording") { levels.fill(0); shown.fill(0); }
+  if (phase === "recording") {
+    levels.fill(0); shown.fill(0);
+    // The window may have been laid out while off-screen or hidden (Windows): re-measure the
+    // canvas, and replay the pop-in so the last take's faded-out frame never lingers.
+    if (canvas.width !== Math.round(canvas.clientWidth * (window.devicePixelRatio || 1))) resize();
+    pill.style.animation = "none";
+    void pill.offsetWidth;
+    pill.style.animation = "";
+  }
 });
 
 // Design/debug aid: drive the pill from the browser console or a preview without Tauri.
