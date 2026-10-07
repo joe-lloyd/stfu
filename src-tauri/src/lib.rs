@@ -15,8 +15,8 @@ use audio::Recorder;
 use config::Config;
 use hotkey::HotkeyEvent;
 use serde::Serialize;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Mutex, RwLock};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{mpsc, Arc, RwLock};
 use std::time::{Duration, Instant};
 use tauri::{
     menu::{CheckMenuItem, CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder, SubmenuBuilder},
@@ -49,34 +49,40 @@ fn set_state(app: &AppHandle, phase: &str, message: Option<String>) {
 /// only that take may repaint or hide the pill afterwards. Without this, a take finishing (its
 /// "done" fade hides the pill a second later) would hide the pill of the next take the user is
 /// already talking into.
-static PILL_OWNER: Mutex<u64> = Mutex::new(0);
+///
+/// A plain atomic, never a lock held around window calls: on Windows those calls wait for the
+/// UI thread to answer, and the pill must never wait on anything but the window itself.
+static PILL_OWNER: AtomicU64 = AtomicU64::new(0);
 
 /// Makes a new take the pill's owner and shows the pill. Returns the take's number.
 fn claim_pill(app: &AppHandle) -> u64 {
-    let mut owner = PILL_OWNER.lock().unwrap_or_else(|e| e.into_inner());
-    *owner += 1;
+    let take = PILL_OWNER.fetch_add(1, Ordering::SeqCst) + 1;
     if let Some(win) = pill(app) {
         show_pill(&win);
     }
-    *owner
+    log::info!("pill shown for take {take}");
+    take
 }
 
 /// `set_state`, but only while `take` still owns the pill.
 fn set_take_state(app: &AppHandle, take: u64, phase: &str, message: Option<String>) {
-    let owner = PILL_OWNER.lock().unwrap_or_else(|e| e.into_inner());
-    if *owner == take {
+    if PILL_OWNER.load(Ordering::SeqCst) == take {
         set_state(app, phase, message);
     }
 }
 
 /// Hides the pill, unless a newer take has claimed it since `take` did.
 fn release_pill(app: &AppHandle, take: u64) {
-    let owner = PILL_OWNER.lock().unwrap_or_else(|e| e.into_inner());
-    if *owner != take {
+    if PILL_OWNER.load(Ordering::SeqCst) != take {
+        log::info!("pill kept up: take {take} is done but a newer take owns it");
         return;
     }
-    if let Some(win) = pill(app) {
-        hide_pill(&win);
+    let Some(win) = pill(app) else { return };
+    hide_pill(&win);
+    // A new take may have claimed the pill while it was being hidden: put it back.
+    if PILL_OWNER.load(Ordering::SeqCst) != take {
+        log::info!("pill re-shown: a new take started while take {take} was hiding it");
+        show_pill(&win);
     }
 }
 
