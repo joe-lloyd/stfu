@@ -16,7 +16,7 @@ use config::Config;
 use hotkey::HotkeyEvent;
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, RwLock};
+use std::sync::{mpsc, Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use tauri::{
     menu::{CheckMenuItem, CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder, SubmenuBuilder},
@@ -43,6 +43,41 @@ struct StateEvent<'a> {
 
 fn set_state(app: &AppHandle, phase: &str, message: Option<String>) {
     let _ = app.emit_to(PILL, "state", StateEvent { phase, message });
+}
+
+/// Which take owns the pill. Every hotkey press that starts recording takes the next number, and
+/// only that take may repaint or hide the pill afterwards. Without this, a take finishing (its
+/// "done" fade hides the pill a second later) would hide the pill of the next take the user is
+/// already talking into.
+static PILL_OWNER: Mutex<u64> = Mutex::new(0);
+
+/// Makes a new take the pill's owner and shows the pill. Returns the take's number.
+fn claim_pill(app: &AppHandle) -> u64 {
+    let mut owner = PILL_OWNER.lock().unwrap_or_else(|e| e.into_inner());
+    *owner += 1;
+    if let Some(win) = pill(app) {
+        show_pill(&win);
+    }
+    *owner
+}
+
+/// `set_state`, but only while `take` still owns the pill.
+fn set_take_state(app: &AppHandle, take: u64, phase: &str, message: Option<String>) {
+    let owner = PILL_OWNER.lock().unwrap_or_else(|e| e.into_inner());
+    if *owner == take {
+        set_state(app, phase, message);
+    }
+}
+
+/// Hides the pill, unless a newer take has claimed it since `take` did.
+fn release_pill(app: &AppHandle, take: u64) {
+    let owner = PILL_OWNER.lock().unwrap_or_else(|e| e.into_inner());
+    if *owner != take {
+        return;
+    }
+    if let Some(win) = pill(app) {
+        hide_pill(&win);
+    }
 }
 
 fn pill(app: &AppHandle) -> Option<WebviewWindow> {
@@ -530,7 +565,9 @@ pub fn run() {
         .expect("error while running tauri application");
 }
 
-/// Owns the record -> transcribe -> clean -> paste flow. One dictation at a time.
+/// Owns the record -> transcribe -> clean -> paste flow. One recording at a time, but a new one
+/// may start while the last is still being transcribed: takes are processed and pasted in order,
+/// and a paste waits until the hotkey is released so it never lands mid-press.
 fn pipeline_loop(
     app: AppHandle,
     cfg: SharedConfig,
@@ -539,30 +576,34 @@ fn pipeline_loop(
 ) {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
     let client = reqwest::Client::new();
-    let busy = Arc::new(AtomicBool::new(false));
+    // True while the hotkey is held for a take; pastes wait for it to drop.
+    let holding = Arc::new(AtomicBool::new(false));
     let mut recording = false;
     let mut started_at = Instant::now();
     // The history record for the take in progress, stamped when the hotkey goes down.
     let mut take = history::new_record();
+    // The take's claim on the pill (see `claim_pill`).
+    let mut take_no = 0;
+    // The previous take's processing, which the next one waits for so pastes keep their order.
+    let mut previous: Option<tokio::task::JoinHandle<()>> = None;
 
     while let Ok(ev) = rx.recv() {
         match ev {
             HotkeyEvent::Down => {
                 log::info!("hotkey down");
-                if busy.load(Ordering::SeqCst) || recording {
+                if recording {
                     continue;
                 }
                 match recorder.start() {
                     Ok(levels) => {
                         recording = true;
+                        holding.store(true, Ordering::SeqCst);
                         started_at = Instant::now();
                         // Read before the pill appears: the app in front now is where the text goes.
                         take = history::new_record();
                         take.target_app = history::frontmost_app();
-                        if let Some(win) = pill(&app) {
-                            show_pill(&win);
-                        }
-                        set_state(&app, "recording", None);
+                        take_no = claim_pill(&app);
+                        set_take_state(&app, take_no, "recording", None);
                         let app2 = app.clone();
                         std::thread::spawn(move || {
                             while let Ok(level) = levels.recv() {
@@ -579,6 +620,7 @@ fn pipeline_loop(
                     continue;
                 }
                 recording = false;
+                holding.store(false, Ordering::SeqCst);
                 let wav = recorder.stop();
                 let held = started_at.elapsed();
                 let snapshot = cfg.read().unwrap().clone();
@@ -588,17 +630,13 @@ fn pipeline_loop(
                 rec.audio.held_ms = held.as_millis() as u64;
                 // Taps shorter than this are almost always accidental.
                 if held < Duration::from_millis(300) {
-                    if let Some(win) = pill(&app) {
-                        hide_pill(&win);
-                    }
+                    release_pill(&app, take_no);
                     continue;
                 }
                 let wav = match wav {
                     Ok(w) if w.is_empty() => {
                         // Nothing usable was recorded: hide the pill, no error.
-                        if let Some(win) = pill(&app) {
-                            hide_pill(&win);
-                        }
+                        release_pill(&app, take_no);
                         continue;
                     }
                     Ok(w) => w,
@@ -608,7 +646,7 @@ fn pipeline_loop(
                         if snapshot.history.enabled {
                             record_history(&app, &rec);
                         }
-                        finish(&app, Err(e));
+                        finish(&app, take_no, Err(e));
                         continue;
                     }
                 };
@@ -624,16 +662,20 @@ fn pipeline_loop(
                         Err(e) => log::warn!("could not keep audio for history: {e:#}"),
                     }
                 }
-                busy.store(true, Ordering::SeqCst);
-                set_state(&app, "processing", Some("Transcribing…".into()));
+                set_take_state(&app, take_no, "processing", Some("Transcribing…".into()));
 
                 if snapshot.needs_setup() {
                     show_settings(&app);
                 }
-                let (app2, client2, busy2) = (app.clone(), client.clone(), busy.clone());
-                rt.spawn(async move {
+                let (app2, client2, holding2) = (app.clone(), client.clone(), holding.clone());
+                let (no, before) = (take_no, previous.take());
+                previous = Some(rt.spawn(async move {
+                    if let Some(before) = before {
+                        let _ = before.await;
+                    }
                     let t0 = Instant::now();
-                    let result = process(&app2, &snapshot, &client2, wav, &mut rec).await;
+                    let result =
+                        process(&app2, no, &holding2, &snapshot, &client2, wav, &mut rec).await;
                     rec.total_ms = t0.elapsed().as_millis() as u64;
                     if let Err(e) = &result {
                         rec.outcome = "failed".into();
@@ -642,10 +684,9 @@ fn pipeline_loop(
                     if snapshot.history.enabled {
                         record_history(&app2, &rec);
                     }
-                    finish(&app2, result);
+                    finish(&app2, no, result);
                     maintain_history(&app2, &snapshot.history);
-                    busy2.store(false, Ordering::SeqCst);
-                });
+                }));
             }
         }
     }
@@ -655,6 +696,8 @@ fn pipeline_loop(
 /// Fills `rec` with each stage's input, output and timing as it goes, including on failure.
 async fn process(
     app: &AppHandle,
+    take_no: u64,
+    holding: &AtomicBool,
     cfg: &Config,
     client: &reqwest::Client,
     wav: Vec<u8>,
@@ -688,7 +731,7 @@ async fn process(
     rec.llm.base_url = cfg.llm().base_url.clone();
     rec.llm.model = cfg.llm().model.clone();
     let text = if cfg.llm().enabled {
-        set_state(app, "processing", Some("Cleaning up…".into()));
+        set_take_state(app, take_no, "processing", Some("Cleaning up…".into()));
         let t1 = Instant::now();
         let mut trace = llm::Trace::default();
         let cleaned = llm::cleanup_traced(client, cfg, &raw, &mut trace).await;
@@ -720,7 +763,12 @@ async fn process(
         return Ok(None);
     }
 
-    set_state(app, "processing", Some("Pasting…".into()));
+    // The user may already be holding the hotkey for the next take: a paste now would be
+    // combined with the held key, so wait for the release.
+    while holding.load(Ordering::SeqCst) {
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    set_take_state(app, take_no, "processing", Some("Pasting…".into()));
     let to_paste = text.clone();
     let t2 = Instant::now();
     let pasted = tokio::task::spawn_blocking(move || inject::paste(&to_paste))
@@ -770,26 +818,24 @@ fn record_history(app: &AppHandle, rec: &history::Record) {
     }
 }
 
-fn finish(app: &AppHandle, result: anyhow::Result<Option<String>>) {
+fn finish(app: &AppHandle, take_no: u64, result: anyhow::Result<Option<String>>) {
     let hide_after = match result {
         Ok(None) => Duration::ZERO,
         Ok(Some(_)) => {
-            set_state(app, "done", None);
+            set_take_state(app, take_no, "done", None);
             Duration::from_millis(1000) // ripple + fade-out play inside the webview
         }
         Err(e) => {
             log::error!("dictation failed: {e:#}");
             let short: String = e.to_string().chars().take(60).collect();
-            set_state(app, "error", Some(short));
+            set_take_state(app, take_no, "error", Some(short));
             Duration::from_millis(2500)
         }
     };
     let app = app.clone();
     std::thread::spawn(move || {
         std::thread::sleep(hide_after);
-        if let Some(win) = pill(&app) {
-            hide_pill(&win);
-        }
+        release_pill(&app, take_no);
     });
 }
 
