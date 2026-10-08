@@ -151,6 +151,27 @@ fn show_pill(win: &WebviewWindow) {
     if let Err(e) = win.show() {
         log::error!("could not show the pill: {e}");
     }
+    raise_pill(win);
+}
+
+/// Puts the pill back on top of every window, other always-on-top ones included.
+///
+/// On Windows the pill only ever moves, and moving never changes the z-order, so whatever was
+/// raised since startup (the target app, the taskbar, another topmost window) could cover it.
+/// Setting always-on-top again re-raises it, but Tauri skips a value that has not changed, so
+/// turn it off first.
+fn raise_pill(win: &WebviewWindow) {
+    #[cfg(target_os = "windows")]
+    {
+        if let Err(e) = win
+            .set_always_on_top(false)
+            .and_then(|_| win.set_always_on_top(true))
+        {
+            log::error!("could not raise the pill: {e}");
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    let _ = win;
 }
 
 /// Takes the pill away.
