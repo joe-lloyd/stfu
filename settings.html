@@ -106,12 +106,16 @@
           <div class="meter" id="hist-meter"><div></div></div>
           <div class="limits">
             <div>
-              <label for="hist-days">Keep for (days)</label>
+              <label for="hist-max">Recordings limit (MB)</label>
+              <input id="hist-max" type="number" min="0" step="50" />
+            </div>
+            <div>
+              <label for="hist-days">Keep recordings (days)</label>
               <input id="hist-days" type="number" min="0" step="1" />
             </div>
             <div>
-              <label for="hist-max">Size limit (MB)</label>
-              <input id="hist-max" type="number" min="0" step="50" />
+              <label for="hist-text-days">Keep transcripts (days)</label>
+              <input id="hist-text-days" type="number" min="0" step="1" />
             </div>
             <label class="toggle" style="flex:1"><input type="checkbox" id="hist-confirm" /> Ask me before deleting anything</label>
           </div>
@@ -119,7 +123,7 @@
             <span id="hist-compress-text"></span>
             <button id="hist-compress">Compress now</button>
           </div>
-          <div class="hint">0 means no limit. At 80% of the size limit, recordings from before today are compressed by themselves: lossless (FLAC), about half the size, and they play back exactly as recorded. Only when that is not enough do you get a warning. Then, over the size limit, the oldest recordings go first and their transcripts stay, since audio is nearly all of the space. Days older than the age limit are removed entirely. With "ask me" on, nothing is ever deleted until you confirm here; off, cleanup runs by itself after each dictation.</div>
+          <div class="hint">0 means no limit; transcripts are kept forever unless you set a number. The limits only ever remove recordings, since audio is nearly all of the space: a transcript costs a couple of KB. At 80% of the recordings limit, recordings from before today are compressed by themselves: lossless (FLAC), about half the size, and they play back exactly as recorded. Only when that is not enough do you get a warning; past the limit, the oldest recordings go first and their transcripts stay. With "ask me" on, nothing is ever deleted until you confirm here; off, cleanup runs by itself after each dictation.</div>
         </section>
 
         <div class="banner" id="hist-banner" hidden>
@@ -132,7 +136,8 @@
           <select id="hist-day"></select>
           <input id="hist-search" placeholder="Search this day" />
           <button id="hist-folder" title="Open the history folder">Open folder</button>
-          <button id="hist-delete" title="Delete this day's history and audio">Delete day</button>
+          <button id="hist-delete-audio" title="Delete this day's recordings and keep its transcripts">Delete recordings</button>
+          <button id="hist-delete" title="Delete this day's transcripts, results and recordings">Delete day</button>
         </div>
         <div class="status" id="hist-status" style="margin:0 0 8px"></div>
         <div id="hist-list"></div>

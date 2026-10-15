@@ -374,6 +374,7 @@ pub fn run() {
             commands::history_entries,
             commands::history_audio,
             commands::history_delete_day,
+            commands::history_delete_audio,
             commands::history_open_folder,
             commands::history_settings,
             commands::history_status,

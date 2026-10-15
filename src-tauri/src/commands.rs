@@ -426,6 +426,17 @@ pub fn history_delete_day(day: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Deletes a day's recordings and keeps its transcripts.
+#[tauri::command]
+pub fn history_delete_audio(day: String) -> Result<(), String> {
+    if crate::COMPRESSING.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err("Older recordings are being compressed. Try again in a moment.".into());
+    }
+    history::dir().and_then(|root| history::delete_audio(&root, &day)).map_err(|e| format!("{e:#}"))?;
+    log::info!("deleted the recordings of {day}");
+    Ok(())
+}
+
 /// Opens the history folder in Finder / Explorer / the file manager. Always this one fixed path.
 #[tauri::command]
 pub fn history_open_folder() -> Result<(), String> {
@@ -487,7 +498,7 @@ pub struct HistoryStatus {
     pub usage: history::Usage,
     /// What a cleanup would delete right now under the current limits.
     pub plan: history::Plan,
-    /// Past the warning share of the size cap.
+    /// The recordings are past the warning share of the size cap.
     pub near_limit: bool,
     /// Older recordings are being compressed right now.
     pub compressing: bool,
@@ -499,7 +510,7 @@ fn status_for(h: &crate::config::HistoryConfig) -> Result<HistoryStatus, String>
     let usage = history::usage(&root, &today);
     let limits = h.limits();
     let near_limit =
-        limits.max_bytes > 0 && usage.total_bytes as f64 >= limits.max_bytes as f64 * history::WARN_AT;
+        limits.max_bytes > 0 && usage.audio_bytes as f64 >= limits.max_bytes as f64 * history::WARN_AT;
     Ok(HistoryStatus {
         path: root.display().to_string(),
         plan: history::plan(&root, limits, &today),

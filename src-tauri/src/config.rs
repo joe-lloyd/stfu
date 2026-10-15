@@ -120,10 +120,15 @@ pub struct HistoryConfig {
     /// Keep each take's audio next to it (about 32 KB per second of speech).
     #[serde(default = "default_true")]
     pub save_audio: bool,
-    /// Days of history to keep; older days are removed entirely. 0 = keep forever.
-    #[serde(default = "default_keep_days")]
-    pub keep_days: u32,
-    /// Size cap for the history folder in MB; over it, the oldest recordings go first. 0 = no cap.
+    /// Days to keep recordings; older ones go and their transcripts stay. 0 = keep forever.
+    /// Read from `keep_days`, its name when it removed whole days, so a chosen value carries over.
+    #[serde(default = "default_audio_days", alias = "keep_days")]
+    pub audio_days: u32,
+    /// Days to keep transcripts and results; older days go entirely. 0 (the default) = forever.
+    #[serde(default)]
+    pub text_days: u32,
+    /// Size cap for the recordings in MB; over it, the oldest go first. Transcripts are not
+    /// counted. 0 = no cap.
     #[serde(default = "default_max_mb")]
     pub max_mb: u64,
     /// Ask in Settings before deleting anything, instead of cleaning up automatically.
@@ -131,7 +136,7 @@ pub struct HistoryConfig {
     pub confirm_cleanup: bool,
 }
 
-fn default_keep_days() -> u32 {
+fn default_audio_days() -> u32 {
     30
 }
 
@@ -145,7 +150,8 @@ impl Default for HistoryConfig {
         Self {
             enabled: true,
             save_audio: true,
-            keep_days: default_keep_days(),
+            audio_days: default_audio_days(),
+            text_days: 0,
             max_mb: default_max_mb(),
             confirm_cleanup: true,
         }
@@ -154,7 +160,11 @@ impl Default for HistoryConfig {
 
 impl HistoryConfig {
     pub fn limits(&self) -> crate::history::Limits {
-        crate::history::Limits { keep_days: self.keep_days, max_bytes: self.max_mb * 1024 * 1024 }
+        crate::history::Limits {
+            audio_days: self.audio_days,
+            text_days: self.text_days,
+            max_bytes: self.max_mb * 1024 * 1024,
+        }
     }
 }
 
@@ -398,5 +408,13 @@ mod tests {
         assert!(cfg.stt_key().is_some());
         assert!(cfg.llm_key().is_some());
         assert!(!cfg.needs_setup(), "a local profile must not nag for keys");
+    }
+
+    #[test]
+    fn an_old_age_limit_now_applies_to_recordings_only() {
+        let h: HistoryConfig = serde_json::from_str(r#"{"keep_days": 7, "max_mb": 300}"#).unwrap();
+        assert_eq!((h.audio_days, h.text_days, h.max_mb), (7, 0, 300), "transcripts are kept");
+        let h: HistoryConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!((h.audio_days, h.text_days, h.max_mb), (30, 0, 500));
     }
 }
