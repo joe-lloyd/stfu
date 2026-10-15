@@ -5,10 +5,13 @@
 //!   history/2026-09-28.jsonl                       every stage of every dictation that day
 //!   history/audio/2026-09-28/20260928-143012-123.wav  what the microphone heard
 //!
+//! Recordings from past days may be compressed to `<id>.flac` (lossless, about half the size)
+//! when history nears its size limit; `read_audio` reads either.
+//!
 //! JSON Lines because it is append-only (a crash mid-write loses at most the line being written,
 //! never the file), readable with any editor, and greppable or `jq`-able without the app.
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -49,7 +52,8 @@ pub struct TargetApp {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Audio {
-    /// Path relative to the history folder; absent when audio is not kept.
+    /// Path relative to the history folder; absent when audio is not kept. Always the `.wav`
+    /// name it was saved under, even after the file is compressed to `.flac` beside it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file: Option<String>,
     /// How long the hotkey was held.
@@ -106,6 +110,12 @@ pub struct Output {
     pub paste_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub paste_error: Option<String>,
+    /// Whether a text field had focus at paste time: `text_field`, `no_text_field` or `unknown`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub focus: Option<String>,
+    /// The text was left on the clipboard instead of putting the previous contents back.
+    #[serde(default)]
+    pub on_clipboard: bool,
 }
 
 pub fn dir() -> Result<PathBuf> {
@@ -239,10 +249,88 @@ pub fn read_day(root: &Path, day: &str) -> Result<Vec<serde_json::Value>> {
     Ok(out)
 }
 
+/// A take's audio as WAV, whether it is stored as WAV or was compressed to FLAC since.
+/// The most recent dictation that produced text, from the newest few days: (text, ts, app).
+pub fn last_output(root: &Path) -> Option<(String, String, Option<String>)> {
+    for day in days(root).ok()?.iter().take(3) {
+        for r in read_day(root, &day.day).ok()? {
+            let text = r["output"]["text"].as_str().unwrap_or_default();
+            if !text.trim().is_empty() {
+                let app = r["target_app"]["name"].as_str().map(String::from);
+                return Some((text.to_string(), r["ts"].as_str().unwrap_or_default().to_string(), app));
+            }
+        }
+    }
+    None
+}
+
 pub fn read_audio(root: &Path, id: &str) -> Result<Vec<u8>> {
     check_id(id)?;
-    let path = root.join("audio").join(day_of(id)?).join(format!("{id}.wav"));
-    std::fs::read(&path).with_context(|| format!("no audio kept for this dictation ({})", path.display()))
+    let folder = root.join("audio").join(day_of(id)?);
+    let wav = folder.join(format!("{id}.wav"));
+    match std::fs::read(&wav) {
+        Ok(bytes) => return Ok(bytes),
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            return Err(e).with_context(|| format!("reading {}", wav.display()))
+        }
+        Err(_) => {}
+    }
+    let flac = folder.join(format!("{id}.flac"));
+    let bytes = std::fs::read(&flac)
+        .with_context(|| format!("no audio kept for this dictation ({})", wav.display()))?;
+    crate::flac::decode_to_wav(&bytes).with_context(|| format!("decoding {}", flac.display()))
+}
+
+/// Compresses every WAV recording of one day to FLAC. Each file is decoded again and compared
+/// sample by sample before its WAV is removed, so a fault here can cost space but never audio.
+/// Returns the bytes before and after.
+pub fn compress_day(root: &Path, day: &str) -> Result<(u64, u64)> {
+    check_day(day)?;
+    let folder = root.join("audio").join(day);
+    let Ok(entries) = std::fs::read_dir(&folder) else { return Ok((0, 0)) };
+    let (mut before, mut after) = (0u64, 0u64);
+    for e in entries.filter_map(|e| e.ok()) {
+        let path = e.path();
+        let Some(id) = path.file_name().and_then(|n| n.to_str()).and_then(|n| n.strip_suffix(".wav")) else {
+            continue;
+        };
+        if check_id(id).is_err() {
+            continue;
+        }
+        let wav = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
+        let pcm = match crate::flac::parse_wav(&wav) {
+            Ok(p) => p,
+            Err(e) => {
+                log::warn!("not compressing {}: {e:#}", path.display());
+                continue;
+            }
+        };
+        let flac = crate::flac::encode(&pcm)?;
+        if crate::flac::decode(&flac).ok().as_ref() != Some(&pcm) {
+            bail!("compressed {} did not match the original; left it as it was", path.display());
+        }
+        let part = folder.join(format!("{id}.flac.part"));
+        std::fs::write(&part, &flac).with_context(|| format!("writing {}", part.display()))?;
+        std::fs::rename(&part, folder.join(format!("{id}.flac")))?;
+        std::fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
+        before += wav.len() as u64;
+        after += flac.len() as u64;
+    }
+    Ok((before, after))
+}
+
+/// Past days that still hold uncompressed recordings. Today's are left alone: they are the
+/// ones most likely to be replayed, and the folder is still being written to.
+pub fn compressible_days(root: &Path, today: &str) -> Vec<String> {
+    day_sizes(root).into_iter().filter(|d| d.wav > 0 && d.day != today).map(|d| d.day).collect()
+}
+
+/// Compression runs on its own once history passes the warning share of its size limit. It
+/// loses nothing, so unlike deleting it never waits for a yes.
+pub fn compression_due(root: &Path, limits: Limits, today: &str) -> bool {
+    limits.max_bytes > 0
+        && usage(root, today).total_bytes as f64 >= limits.max_bytes as f64 * WARN_AT
+        && !compressible_days(root, today).is_empty()
 }
 
 /// Removes a day's history file and its audio folder.
@@ -276,6 +364,8 @@ pub struct Usage {
     pub text_bytes: u64,
     pub days: usize,
     pub oldest_day: Option<String>,
+    /// Past days' recordings still stored as WAV, which compression would roughly halve.
+    pub compressible_bytes: u64,
 }
 
 /// What a cleanup would delete. Built without touching anything, so it can be shown to the user
@@ -307,9 +397,18 @@ fn dir_size(path: &Path) -> u64 {
         .sum()
 }
 
-/// Per-day sizes, oldest first: (day, text bytes, audio bytes).
-fn day_sizes(root: &Path) -> Vec<(String, u64, u64)> {
-    let mut map = std::collections::BTreeMap::<String, (u64, u64)>::new();
+struct DaySize {
+    day: String,
+    text: u64,
+    /// Every recording of the day, WAV and FLAC.
+    audio: u64,
+    /// The part of `audio` that is still WAV.
+    wav: u64,
+}
+
+/// Per-day sizes, oldest first.
+fn day_sizes(root: &Path) -> Vec<DaySize> {
+    let mut map = std::collections::BTreeMap::<String, (u64, u64, u64)>::new();
     if let Ok(entries) = std::fs::read_dir(root) {
         for e in entries.filter_map(|e| e.ok()) {
             let Ok(name) = e.file_name().into_string() else { continue };
@@ -323,23 +422,36 @@ fn day_sizes(root: &Path) -> Vec<(String, u64, u64)> {
         for e in entries.filter_map(|e| e.ok()) {
             let Ok(day) = e.file_name().into_string() else { continue };
             if check_day(&day).is_ok() {
-                map.entry(day).or_default().1 = dir_size(&e.path());
+                let wav = std::fs::read_dir(e.path())
+                    .map(|files| {
+                        files
+                            .filter_map(|f| f.ok())
+                            .filter(|f| f.file_name().to_str().is_some_and(|n| n.ends_with(".wav")))
+                            .filter_map(|f| f.metadata().ok())
+                            .map(|m| m.len())
+                            .sum()
+                    })
+                    .unwrap_or(0);
+                let entry = map.entry(day).or_default();
+                entry.1 = dir_size(&e.path());
+                entry.2 = wav;
             }
         }
     }
-    map.into_iter().map(|(d, (t, a))| (d, t, a)).collect()
+    map.into_iter().map(|(day, (text, audio, wav))| DaySize { day, text, audio, wav }).collect()
 }
 
-pub fn usage(root: &Path) -> Usage {
+pub fn usage(root: &Path, today: &str) -> Usage {
     let sizes = day_sizes(root);
-    let text_bytes = sizes.iter().map(|s| s.1).sum();
-    let audio_bytes = sizes.iter().map(|s| s.2).sum();
+    let text_bytes = sizes.iter().map(|s| s.text).sum();
+    let audio_bytes = sizes.iter().map(|s| s.audio).sum();
     Usage {
         total_bytes: text_bytes + audio_bytes,
         audio_bytes,
         text_bytes,
         days: sizes.len(),
-        oldest_day: sizes.first().map(|s| s.0.clone()),
+        oldest_day: sizes.first().map(|s| s.day.clone()),
+        compressible_bytes: sizes.iter().filter(|s| s.day != today).map(|s| s.wav).sum(),
     }
 }
 
@@ -356,7 +468,7 @@ pub fn plan(root: &Path, limits: Limits, today: &str) -> Plan {
         .map(|t| (t - chrono::Duration::days(limits.keep_days as i64)).format("%Y-%m-%d").to_string());
 
     let mut remaining = Vec::new();
-    for (day, text, audio) in sizes {
+    for DaySize { day, text, audio, .. } in sizes {
         if cutoff.as_deref().is_some_and(|c| day.as_str() < c) && day != today {
             plan.frees_bytes += text + audio;
             plan.expired_days.push(day);
@@ -552,8 +664,8 @@ mod tests {
         assert_eq!(p.frees_bytes, 110);
 
         apply(&root, &p).unwrap();
-        assert_eq!(usage(&root).days, 2);
-        assert_eq!(usage(&root).oldest_day.as_deref(), Some("2026-09-20"));
+        assert_eq!(usage(&root, "2026-09-28").days, 2);
+        assert_eq!(usage(&root, "2026-09-28").oldest_day.as_deref(), Some("2026-09-20"));
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -569,7 +681,7 @@ mod tests {
         assert_eq!(p.frees_bytes, 500);
 
         apply(&root, &p).unwrap();
-        let u = usage(&root);
+        let u = usage(&root, "2026-09-28");
         assert_eq!(u.days, 3);
         assert_eq!(u.audio_bytes, 1000);
         assert!(plan(&root, Limits { keep_days: 0, max_bytes: 1100 }, "2026-09-28").is_empty());
@@ -583,6 +695,48 @@ mod tests {
         assert!(plan(&root, Limits { keep_days: 1, max_bytes: 100 }, "2026-09-28").is_empty());
         seed(&root, "2020-01-01", 10, 5000);
         assert!(plan(&root, Limits { keep_days: 0, max_bytes: 0 }, "2026-09-28").is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A real, compressible recording: a tone with some noise, like speech in a quiet room.
+    fn tone_wav(frames: usize) -> Vec<u8> {
+        let samples = (0..frames)
+            .map(|i| ((i as f64 * 0.07).sin() * 9000.0 + ((i * 7919) % 61) as f64 - 30.0) as i16)
+            .collect();
+        crate::flac::to_wav(&crate::flac::Pcm { rate: 16000, channels: 1, samples })
+    }
+
+    #[test]
+    fn near_the_size_limit_past_days_are_compressed_losslessly() {
+        let root = temp_root("compress");
+        let (old, today) = ("20260927-101010-000", "20260928-090000-000");
+        let old_wav = tone_wav(64_000);
+        save_audio(&root, old, &old_wav).unwrap();
+        save_audio(&root, today, &tone_wav(64_000)).unwrap();
+        // A leftover that is not audio stays where it is and does not stop the rest.
+        std::fs::write(root.join("audio/2026-09-27/20260927-111111-000.wav"), b"junk").unwrap();
+
+        let before = usage(&root, "2026-09-28");
+        assert_eq!(before.compressible_bytes, old_wav.len() as u64 + 4, "today is not counted");
+        let roomy = Limits { keep_days: 0, max_bytes: before.total_bytes * 2 };
+        assert!(!compression_due(&root, roomy, "2026-09-28"), "well under the limit");
+        let tight = Limits { keep_days: 0, max_bytes: before.total_bytes };
+        assert!(compression_due(&root, tight, "2026-09-28"));
+        assert_eq!(compressible_days(&root, "2026-09-28"), vec!["2026-09-27"]);
+
+        let (was, now) = compress_day(&root, "2026-09-27").unwrap();
+        assert_eq!(was, old_wav.len() as u64);
+        assert!(now < was / 2, "{now} of {was}");
+        assert!(!root.join("audio/2026-09-27/20260927-101010-000.wav").exists());
+        assert!(root.join("audio/2026-09-27/20260927-101010-000.flac").exists());
+        assert_eq!(read_audio(&root, old).unwrap(), old_wav, "plays back bit for bit");
+        assert!(root.join("audio/2026-09-28/20260928-090000-000.wav").exists());
+
+        let after = usage(&root, "2026-09-28");
+        assert_eq!(after.total_bytes, before.total_bytes - was + now);
+        assert_eq!(after.compressible_bytes, 4, "only the unreadable file is left");
+        // The size limit then plans deletions from the compressed sizes.
+        assert!(plan(&root, Limits { keep_days: 0, max_bytes: after.total_bytes }, "2026-09-28").is_empty());
         let _ = std::fs::remove_dir_all(&root);
     }
 

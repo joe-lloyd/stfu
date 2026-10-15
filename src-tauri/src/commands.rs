@@ -444,6 +444,7 @@ pub fn history_open_folder() -> Result<(), String> {
 /// Returns the new status, since changing a limit changes what a cleanup would do.
 #[tauri::command]
 pub fn history_settings(
+    app: tauri::AppHandle,
     state: State<'_, SharedConfig>,
     history: crate::config::HistoryConfig,
 ) -> Result<HistoryStatus, String> {
@@ -453,6 +454,30 @@ pub fn history_settings(
     log::info!("history settings: {:?}", cfg.history);
     let h = cfg.history.clone();
     drop(cfg);
+    // A lower limit may call for compression; never for deleting, that waits for a dictation or
+    // for "Clean up now".
+    let root = history::dir().map_err(|e| format!("{e:#}"))?;
+    if history::compression_due(&root, h.limits(), &history::today()) {
+        start_compressing(&app);
+    }
+    status_for(&h)
+}
+
+/// Marks compression as running before the background pass starts, so the status returned right
+/// after already says so instead of offering a deletion the compression may make unnecessary.
+fn start_compressing(app: &tauri::AppHandle) {
+    crate::COMPRESSING.store(true, std::sync::atomic::Ordering::SeqCst);
+    crate::request_upkeep(app, crate::Upkeep::CompressNow);
+}
+
+/// "Compress now": losslessly compress every past day's recordings, whatever the limits say.
+#[tauri::command]
+pub fn history_compress(app: tauri::AppHandle, state: State<'_, SharedConfig>) -> Result<HistoryStatus, String> {
+    let h = state.read().unwrap().history.clone();
+    let root = history::dir().map_err(|e| format!("{e:#}"))?;
+    if !history::compressible_days(&root, &history::today()).is_empty() {
+        start_compressing(&app);
+    }
     status_for(&h)
 }
 
@@ -464,19 +489,23 @@ pub struct HistoryStatus {
     pub plan: history::Plan,
     /// Past the warning share of the size cap.
     pub near_limit: bool,
+    /// Older recordings are being compressed right now.
+    pub compressing: bool,
 }
 
 fn status_for(h: &crate::config::HistoryConfig) -> Result<HistoryStatus, String> {
     let root = history::dir().map_err(|e| format!("{e:#}"))?;
-    let usage = history::usage(&root);
+    let today = history::today();
+    let usage = history::usage(&root, &today);
     let limits = h.limits();
     let near_limit =
         limits.max_bytes > 0 && usage.total_bytes as f64 >= limits.max_bytes as f64 * history::WARN_AT;
     Ok(HistoryStatus {
         path: root.display().to_string(),
-        plan: history::plan(&root, limits, &history::today()),
+        plan: history::plan(&root, limits, &today),
         usage,
         near_limit,
+        compressing: crate::COMPRESSING.load(std::sync::atomic::Ordering::SeqCst),
     })
 }
 
@@ -491,6 +520,9 @@ pub fn history_status(state: State<'_, SharedConfig>) -> Result<HistoryStatus, S
 /// webview, so only what the current limits allow can ever be deleted.
 #[tauri::command]
 pub fn history_cleanup(state: State<'_, SharedConfig>) -> Result<HistoryStatus, String> {
+    if crate::COMPRESSING.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err("Older recordings are being compressed, which may free enough space. Try again in a moment.".into());
+    }
     let h = state.read().unwrap().history.clone();
     let root = history::dir().map_err(|e| format!("{e:#}"))?;
     let plan = history::plan(&root, h.limits(), &history::today());
@@ -514,4 +546,23 @@ pub fn copy_text(text: String) -> Result<(), String> {
     arboard::Clipboard::new()
         .and_then(|mut c| c.set_text(text))
         .map_err(|e| format!("could not copy: {e}"))
+}
+
+/// The last dictation that produced text, for the Settings card. None before the first one.
+#[tauri::command]
+pub fn last_dictation() -> Option<crate::LastDictation> {
+    crate::last_dictation()
+}
+
+/// Saves when a dictation stays on the clipboard; takes effect from the next dictation.
+#[tauri::command]
+pub fn set_clipboard_mode(
+    state: State<'_, SharedConfig>,
+    mode: crate::config::ClipboardMode,
+) -> Result<(), String> {
+    let mut cfg = state.write().unwrap();
+    cfg.clipboard = mode;
+    cfg.save().map_err(|e| format!("{e:#}"))?;
+    log::info!("clipboard mode: {mode:?}");
+    Ok(())
 }

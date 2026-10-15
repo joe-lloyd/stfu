@@ -76,6 +76,10 @@
       .banner.over { background: #3d1c1c; color: #ffc4c4; border-color: #5c2a2a; }
       .banner .row { margin-top: 8px; }
       .empty { color: #7f7f8a; text-align: center; padding: 30px 0; }
+      .last-text { padding: 8px 10px; background: #121216; border-radius: 6px; white-space: pre-wrap; word-break: break-word; user-select: text; max-height: 140px; overflow: auto; }
+      .last-text.muted { color: #7f7f8a; font-style: italic; }
+      .compress { display: flex; gap: 10px; align-items: center; margin-top: 10px; font-size: 12px; color: #b9b9c4; }
+      .compress span { flex: 1; }
     </style>
   </head>
   <body>
@@ -111,7 +115,11 @@
             </div>
             <label class="toggle" style="flex:1"><input type="checkbox" id="hist-confirm" /> Ask me before deleting anything</label>
           </div>
-          <div class="hint">0 means no limit. Days older than the limit are removed entirely. Over the size limit, the oldest recordings go first and their transcripts stay, since audio is nearly all of the space. You get a warning at 80% of the size limit. With "ask me" on, nothing is ever deleted until you confirm here; off, cleanup runs by itself after each dictation.</div>
+          <div class="compress" id="hist-compress-row" hidden>
+            <span id="hist-compress-text"></span>
+            <button id="hist-compress">Compress now</button>
+          </div>
+          <div class="hint">0 means no limit. At 80% of the size limit, recordings from before today are compressed by themselves: lossless (FLAC), about half the size, and they play back exactly as recorded. Only when that is not enough do you get a warning. Then, over the size limit, the oldest recordings go first and their transcripts stay, since audio is nearly all of the space. Days older than the age limit are removed entirely. With "ask me" on, nothing is ever deleted until you confirm here; off, cleanup runs by itself after each dictation.</div>
         </section>
 
         <div class="banner" id="hist-banner" hidden>
@@ -131,6 +139,22 @@
       </div>
 
       <div id="tab-setup">
+
+      <section id="last-section">
+        <h2>Last dictation <span class="hint" id="last-meta" style="font-weight:400"></span></h2>
+        <div class="last-text muted" id="last-text">Nothing dictated yet.</div>
+        <div class="row" style="margin-top:8px">
+          <button id="last-copy" disabled>Copy</button>
+          <span class="status" id="last-status" style="margin:0"></span>
+        </div>
+        <label for="clipboard-mode">Leave the dictation on the clipboard</label>
+        <select id="clipboard-mode">
+          <option value="when_no_text_field">When there's no text field to paste into</option>
+          <option value="always">Always</option>
+          <option value="never">Never: put back what was on the clipboard</option>
+        </select>
+        <div class="hint">Pasting goes through the clipboard, and then whatever you had copied before is put back. When no text field has focus, the dictation stays on the clipboard instead, so you can paste it yourself. Chrome and Electron apps (Slack, VS Code, Teams, …) don't report whether a text field has focus, so there your old clipboard comes back as before. Copy the text from here, or use "Copy last dictation" in the menu bar.</div>
+      </section>
 
       <section id="profile-bar">
         <h2>Profile</h2>

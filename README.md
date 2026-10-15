@@ -170,12 +170,16 @@ Every dictation is written to a local file, one per day, so nothing is ever lost
 
 ```
 ~/Library/Application Support/stfu/history/2026-09-28.jsonl          (Windows: %APPDATA%\stfu\history, Linux: ~/.config/stfu/history)
-~/Library/Application Support/stfu/history/audio/2026-09-28/<id>.wav
+~/Library/Application Support/stfu/history/audio/2026-09-28/<id>.wav   (or <id>.flac once compressed)
 ```
 
 Each line is one JSON object holding the whole take: when it happened and which app had focus, the profile and language, the audio (length, how long the key was held, the WAV file), the speech-to-text model, timing, raw transcript and full server reply, the clean-up model with the exact message it was sent, its raw reply, the cleaned text and any error or fallback, and finally what was pasted and whether pasting worked. Failed and empty takes are recorded too, with their error. Taps under 300 ms are not.
 
-**Limits.** By default history is kept for 30 days and capped at 500 MB (both editable in the History tab; 0 means no limit). Days past the age limit are removed entirely. Over the size cap, the oldest days' recordings go first and their transcripts and results stay, since audio is nearly all of the space. The History tab shows how much is used, warns at 80% of the cap, and says exactly what a cleanup would delete. With "Ask me before deleting anything" on (the default) nothing is deleted until you press Clean up now and confirm, and if a cleanup is waiting when stfu starts, Settings opens on the History tab to ask. Turn it off to let cleanup run by itself after each dictation. Today's history is never removed by a cleanup.
+**Limits.** By default history is kept for 30 days and capped at 500 MB (both editable in the History tab; 0 means no limit). Days past the age limit are removed entirely.
+
+**Compression.** At 80% of the size cap, recordings from before today are compressed by themselves to FLAC: lossless, so they play back sample for sample as recorded, at about half the size (measured on real takes: zip saves ~22%, FLAC ~46-50%). Nothing is deleted and nothing asks. Each file is decoded again and compared with the original before its WAV is removed. **Compress now** in the History tab does the same at any time. The encoder is built in (`src-tauri/src/flac.rs`, no dependency) and writes standard `.flac` files any player opens. Only when compression is no longer enough does the warning below appear.
+
+Over the size cap, the oldest days' recordings go first and their transcripts and results stay, since audio is nearly all of the space. The History tab shows how much is used, warns at 80% of the cap, and says exactly what a cleanup would delete. With "Ask me before deleting anything" on (the default) nothing is deleted until you press Clean up now and confirm, and if a cleanup is waiting when stfu starts, Settings opens on the History tab to ask. Turn it off to let cleanup run by itself after each dictation. Today's history is never removed by a cleanup.
 
 Open **Settings > History** to browse by day, search, play the audio, copy the output, the raw transcript or the full record, open the folder, or delete a day. Recording history and keeping audio can each be switched off there. Audio costs about 32 KB per second of speech.
 
@@ -184,7 +188,8 @@ The history never leaves the machine. The folder and files are readable by your 
 ## Behaviour details
 
 - Taps shorter than 300 ms are ignored.
-- The clipboard is restored to its previous text ~250 ms after pasting.
+- The clipboard is restored to its previous text ~250 ms after pasting, unless no text field has focus: then the dictation stays on the clipboard so it is not lost, and the pill says "Copied to clipboard". Settings > "Leave the dictation on the clipboard" also offers Always and Never. macOS only; the check uses Accessibility. Chrome and Electron apps (Slack, VS Code, Teams, ...) do not report their focused element, so there the old clipboard comes back as before.
+- The last dictation is always one click away: **Copy last dictation** in the menu bar, or the Last dictation card at the top of Settings.
 - If the LLM call fails or times out, the raw transcript is pasted so you never lose a dictation.
 - Errors show in the pill for 2.5 s and in the log (`RUST_LOG=info`).
 

@@ -1,6 +1,8 @@
 mod audio;
 mod commands;
 mod config;
+mod flac;
+mod focus;
 mod history;
 mod hotkey;
 mod inject;
@@ -16,7 +18,7 @@ use config::Config;
 use hotkey::HotkeyEvent;
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, RwLock};
+use std::sync::{mpsc, Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use tauri::{
     menu::{CheckMenuItem, CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder, SubmenuBuilder},
@@ -33,6 +35,44 @@ const PILL: &str = "pill";
 const SETTINGS: &str = "settings";
 
 pub type SharedConfig = Arc<RwLock<Config>>;
+
+/// The last dictation that produced text, for "Copy last dictation" when it had nowhere to go.
+#[derive(Serialize, Clone, Debug)]
+pub(crate) struct LastDictation {
+    pub text: String,
+    /// When it was spoken, RFC 3339.
+    pub ts: String,
+    /// The app that was in front.
+    pub app: Option<String>,
+}
+
+static LAST_DICTATION: Mutex<Option<LastDictation>> = Mutex::new(None);
+
+/// The last dictation, from memory, or from history right after a launch.
+pub(crate) fn last_dictation() -> Option<LastDictation> {
+    if let Some(last) = LAST_DICTATION.lock().unwrap().clone() {
+        return Some(last);
+    }
+    let (text, ts, app) = history::dir().ok().and_then(|root| history::last_output(&root))?;
+    Some(LastDictation { text, ts, app })
+}
+
+fn set_last_dictation(app: &AppHandle, last: LastDictation) {
+    *LAST_DICTATION.lock().unwrap() = Some(last.clone());
+    let _ = app.emit_to(SETTINGS, "last-dictation", last);
+}
+
+/// Tray "Copy last dictation".
+fn copy_last_dictation() {
+    let Some(last) = last_dictation() else {
+        log::info!("copy last dictation: nothing dictated yet");
+        return;
+    };
+    match arboard::Clipboard::new().and_then(|mut c| c.set_text(last.text)) {
+        Ok(()) => log::info!("copied the last dictation from {}", last.ts),
+        Err(e) => log::warn!("could not copy the last dictation: {e}"),
+    }
+}
 
 #[derive(Serialize, Clone)]
 struct StateEvent<'a> {
@@ -338,8 +378,11 @@ pub fn run() {
             commands::history_settings,
             commands::history_status,
             commands::history_cleanup,
+            commands::history_compress,
             commands::take_history_prompt,
             commands::copy_text,
+            commands::last_dictation,
+            commands::set_clipboard_mode,
         ])
         .on_window_event(|window, event| {
             // Closing the settings window hides it so it can be reopened from the tray.
@@ -411,13 +454,14 @@ pub fn run() {
 
             // Tray with Settings, Language, Launch at login, Check for updates and Quit; the app has no main window.
             let settings = MenuItemBuilder::with_id("settings", "Settings…").build(app)?;
+            let copy_last = MenuItemBuilder::with_id("copy-last", "Copy last dictation").build(app)?;
             let autostart = CheckMenuItemBuilder::with_id("autostart", "Launch at login")
                 .checked(config.launch_at_login)
                 .build(app)?;
             let update = MenuItemBuilder::with_id("update", "Check for updates").build(app)?;
             let quit = MenuItemBuilder::with_id("quit", "Quit stfu").build(app)?;
             let menu = MenuBuilder::new(app)
-                .items(&[&settings])
+                .items(&[&settings, &copy_last])
                 .item(&profile_menu)
                 .item(&language_menu)
                 .items(&[&autostart])
@@ -434,6 +478,7 @@ pub fn run() {
                 .on_menu_event(move |app, event| match event.id.as_ref() {
                     "quit" => app.exit(0),
                     "settings" => show_settings(app),
+                    "copy-last" => copy_last_dictation(),
                     "update" => updater::check_now(app.clone()),
                     id if id.starts_with("profile:") => {
                         let name = id.trim_start_matches("profile:").to_string();
@@ -552,11 +597,9 @@ pub fn run() {
             let permissions_ok = input_monitoring;
             if config.needs_setup() || !permissions_ok {
                 show_settings(&app.handle().clone());
-            } else if maintain_history(app.handle(), &config.history) {
-                // Old or excess history is waiting for a yes: ask once per launch, on the History tab.
-                log::info!("history is over its limits; asking before cleaning up");
-                app.state::<commands::HistoryPrompt>().0.store(true, Ordering::SeqCst);
-                show_settings(&app.handle().clone());
+                request_upkeep(app.handle(), Upkeep::AfterTake);
+            } else {
+                request_upkeep(app.handle(), Upkeep::Launch);
             }
 
             // Windows: show the pill once, parked off-screen, so WebView2 composites it from the
@@ -712,11 +755,17 @@ fn pipeline_loop(
                         record_history(&app2, &rec);
                     }
                     finish(&app2, no, result);
-                    maintain_history(&app2, &snapshot.history);
+                    request_upkeep(&app2, Upkeep::AfterTake);
                 }));
             }
         }
     }
+}
+
+/// A take that produced text. `note` is shown on the pill, e.g. that the text went to the
+/// clipboard because there was no text field to paste into.
+struct Done {
+    note: Option<&'static str>,
 }
 
 /// Returns `Ok(None)` when there was nothing worth pasting (no speech), so the caller stays quiet.
@@ -729,7 +778,7 @@ async fn process(
     client: &reqwest::Client,
     wav: Vec<u8>,
     rec: &mut history::Record,
-) -> anyhow::Result<Option<String>> {
+) -> anyhow::Result<Option<Done>> {
     let t0 = Instant::now();
     rec.stt.base_url = cfg.stt().base_url.clone();
     rec.stt.api = cfg.stt().api.clone();
@@ -789,6 +838,10 @@ async fn process(
         rec.outcome = "empty_cleanup".into();
         return Ok(None);
     }
+    set_last_dictation(
+        app,
+        LastDictation { text: text.clone(), ts: rec.ts.clone(), app: rec.target_app.as_ref().map(|a| a.name.clone()) },
+    );
 
     // The user may already be holding the hotkey for the next take: a paste now would be
     // combined with the held key, so wait for the release.
@@ -797,34 +850,140 @@ async fn process(
     }
     set_take_state(app, take_no, "processing", Some("Pasting…".into()));
     let to_paste = text.clone();
+    let mode = cfg.clipboard;
     let t2 = Instant::now();
-    let pasted = tokio::task::spawn_blocking(move || inject::paste(&to_paste))
-        .await
-        .map_err(anyhow::Error::from)
-        .and_then(|r| r);
+    // Where the focus is decides whether the text also stays on the clipboard: with no text field
+    // to paste into it would otherwise be lost. Still pasted either way: the check can be wrong,
+    // and some apps take a paste without a text field in focus.
+    let pasted = tokio::task::spawn_blocking(move || {
+        let focus = focus::current();
+        let keep = mode.keeps(focus);
+        inject::paste(&to_paste, keep).map(|()| (focus, keep))
+    })
+    .await
+    .map_err(anyhow::Error::from)
+    .and_then(|r| r);
     rec.output.paste_ms = t2.elapsed().as_millis() as u64;
-    if let Err(e) = pasted {
-        rec.output.paste_error = Some(format!("{e:#}"));
-        return Err(e);
-    }
+    let (focus, kept) = match pasted {
+        Ok(p) => p,
+        Err(e) => {
+            rec.output.paste_error = Some(format!("{e:#}"));
+            return Err(e);
+        }
+    };
     rec.output.pasted = true;
+    rec.output.focus = Some(focus.as_str().into());
+    rec.output.on_clipboard = kept;
     rec.outcome = "pasted".into();
-    log::info!("total {:?}", t0.elapsed());
-    Ok(Some(text))
+    log::info!("total {:?} | focus {} | left on clipboard: {kept}", t0.elapsed(), focus.as_str());
+    let note = (kept && focus == focus::Focus::NoTextField).then_some("Copied to clipboard");
+    Ok(Some(Done { note }))
 }
 
-/// Keeps the history inside its limits. Automatic mode deletes straight away; confirm mode (the
-/// default) only raises the question in Settings, and never deletes on its own.
-/// Returns true when something is waiting for the user's go-ahead.
-fn maintain_history(app: &AppHandle, h: &config::HistoryConfig) -> bool {
-    let Ok(root) = history::dir() else { return false };
-    let plan = history::plan(&root, h.limits(), &history::today());
+/// Why history upkeep was asked for, which decides how far it may go.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) enum Upkeep {
+    /// After a dictation: compress if due, then delete in automatic mode.
+    AfterTake,
+    /// At launch: like a dictation, and if a deletion waits for a yes, open Settings to ask.
+    Launch,
+    /// "Compress now": compress every past day regardless of the limit, never delete.
+    CompressNow,
+}
+
+/// True while older recordings are being compressed, so Settings can say so and hold back a
+/// deletion that the compression may make unnecessary.
+pub(crate) static COMPRESSING: AtomicBool = AtomicBool::new(false);
+static UPKEEP_RUNNING: AtomicBool = AtomicBool::new(false);
+static UPKEEP_AGAIN: AtomicBool = AtomicBool::new(false);
+static UPKEEP_DELETE: AtomicBool = AtomicBool::new(false);
+static UPKEEP_ASK: AtomicBool = AtomicBool::new(false);
+static UPKEEP_FORCE: AtomicBool = AtomicBool::new(false);
+
+/// Keeps the history inside its limits, on a thread of its own so a dictation never waits for
+/// it (compressing a few hundred MB takes seconds). Requests made while it runs are merged into
+/// one more pass rather than run side by side.
+///
+/// First, once history nears its size limit, past days' recordings are compressed: lossless, so
+/// it never asks. Whatever is still over the limits is then deleted straight away in automatic
+/// mode; in confirm mode (the default) it is only flagged in Settings, never deleted.
+pub(crate) fn request_upkeep(app: &AppHandle, why: Upkeep) {
+    match why {
+        Upkeep::AfterTake => UPKEEP_DELETE.store(true, Ordering::SeqCst),
+        Upkeep::Launch => {
+            UPKEEP_DELETE.store(true, Ordering::SeqCst);
+            UPKEEP_ASK.store(true, Ordering::SeqCst);
+        }
+        Upkeep::CompressNow => UPKEEP_FORCE.store(true, Ordering::SeqCst),
+    }
+    UPKEEP_AGAIN.store(true, Ordering::SeqCst);
+    if UPKEEP_RUNNING.swap(true, Ordering::SeqCst) {
+        return; // the running pass picks this up
+    }
+    let app = app.clone();
+    std::thread::spawn(move || loop {
+        while UPKEEP_AGAIN.swap(false, Ordering::SeqCst) {
+            upkeep_pass(&app);
+        }
+        UPKEEP_RUNNING.store(false, Ordering::SeqCst);
+        // A request that landed between the last check and the store above still gets its pass.
+        if !UPKEEP_AGAIN.load(Ordering::SeqCst) || UPKEEP_RUNNING.swap(true, Ordering::SeqCst) {
+            break;
+        }
+    });
+}
+
+fn upkeep_pass(app: &AppHandle) {
+    let h = app.state::<SharedConfig>().read().unwrap().history.clone();
+    let Ok(root) = history::dir() else { return };
+    let today = history::today();
+    let (force, delete, ask) = (
+        UPKEEP_FORCE.swap(false, Ordering::SeqCst),
+        UPKEEP_DELETE.swap(false, Ordering::SeqCst),
+        UPKEEP_ASK.swap(false, Ordering::SeqCst),
+    );
+
+    if force || history::compression_due(&root, h.limits(), &today) {
+        let days = history::compressible_days(&root, &today);
+        if !days.is_empty() {
+            COMPRESSING.store(true, Ordering::SeqCst);
+            let _ = app.emit_to(SETTINGS, "history-changed", ());
+            let (mut was, mut now) = (0u64, 0u64);
+            for day in &days {
+                match history::compress_day(&root, day) {
+                    Ok((a, b)) => (was, now) = (was + a, now + b),
+                    Err(e) => log::warn!("could not compress the recordings of {day}: {e:#}"),
+                }
+            }
+            log::info!(
+                "compressed the recordings of {} day(s): {} KB -> {} KB",
+                days.len(),
+                was / 1024,
+                now / 1024
+            );
+        }
+    }
+    // Also clears a flag set for a request that turned out to have nothing to compress.
+    if COMPRESSING.swap(false, Ordering::SeqCst) {
+        let _ = app.emit_to(SETTINGS, "history-changed", ());
+    }
+
+    if !delete {
+        return;
+    }
+    let plan = history::plan(&root, h.limits(), &today);
     if plan.is_empty() {
-        return false;
+        return;
     }
     if h.confirm_cleanup {
         let _ = app.emit_to(SETTINGS, "history-changed", ());
-        return true;
+        if ask {
+            // Old or excess history is waiting for a yes: ask once per launch, on the History tab.
+            log::info!("history is over its limits; asking before cleaning up");
+            app.state::<commands::HistoryPrompt>().0.store(true, Ordering::SeqCst);
+            show_settings(app);
+        }
+        return;
     }
     match history::apply(&root, &plan) {
         Ok(()) => {
@@ -832,7 +991,6 @@ fn maintain_history(app: &AppHandle, h: &config::HistoryConfig) -> bool {
         }
         Err(e) => log::warn!("history cleanup failed: {e:#}"),
     }
-    false
 }
 
 /// Appends the take to today's history file and lets an open Settings window refresh its list.
@@ -845,12 +1003,16 @@ fn record_history(app: &AppHandle, rec: &history::Record) {
     }
 }
 
-fn finish(app: &AppHandle, take_no: u64, result: anyhow::Result<Option<String>>) {
+fn finish(app: &AppHandle, take_no: u64, result: anyhow::Result<Option<Done>>) {
     let hide_after = match result {
         Ok(None) => Duration::ZERO,
-        Ok(Some(_)) => {
+        Ok(Some(Done { note: None })) => {
             set_take_state(app, take_no, "done", None);
             Duration::from_millis(1000) // ripple + fade-out play inside the webview
+        }
+        Ok(Some(Done { note: Some(note) })) => {
+            set_take_state(app, take_no, "done", Some(note.into()));
+            Duration::from_millis(2200) // long enough to read; the webview fades it out first
         }
         Err(e) => {
             log::error!("dictation failed: {e:#}");

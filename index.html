@@ -29,6 +29,10 @@
       #msg { display: none; flex: none; max-width: 150px; color: #ffb3b3; font: 500 11px -apple-system, system-ui, "Segoe UI", sans-serif; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       #pill.error #msg { display: block; }
       #pill.error #wave { display: none; }
+      /* "done" with a note (text left on the clipboard): say so, and stay long enough to read. */
+      #pill.done.note { animation: pop 220ms cubic-bezier(.2,.9,.3,1.2) both, fade 300ms ease-in 1800ms both; }
+      #pill.done.note #msg { display: block; flex: 1; max-width: none; text-align: center; color: #9ff0c0; }
+      #pill.done.note #wave { display: none; }
       @keyframes breathe { 0%,100% { transform: scale(1); opacity: 1 } 50% { transform: scale(1.25); opacity: .75 } }
       @keyframes blink { from { opacity: 1 } to { opacity: .2 } }
       @keyframes pop { from { transform: translateY(8px) scale(.9); opacity: 0 } to { transform: none; opacity: 1 } }

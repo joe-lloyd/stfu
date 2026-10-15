@@ -85,6 +85,13 @@ function frame(now: number) {
 }
 requestAnimationFrame(frame);
 
+/** Errors always say something; "done" may carry a note, e.g. that the text went to the clipboard. */
+function showMessage(p: Phase, message?: string) {
+  const note = p === "done" && !!message;
+  pill.className = note ? `${p} note` : p;
+  msg.textContent = p === "error" ? (message ?? "Something went wrong") : note ? message! : "";
+}
+
 listen<number>("level", (e) => {
   levels.copyWithin(0, 1);
   // Boost quiet speech so the wave is lively; clamp to 1.
@@ -95,8 +102,7 @@ listen<StateEvent>("state", (e) => {
   const next = e.payload.phase;
   if (next !== phase) phaseStart = performance.now();
   phase = next;
-  pill.className = phase;
-  msg.textContent = phase === "error" ? (e.payload.message ?? "Something went wrong") : "";
+  showMessage(phase, e.payload.message);
   if (phase === "recording") {
     levels.fill(0); shown.fill(0);
     // The window may have been laid out while off-screen or hidden (Windows): re-measure the
@@ -109,14 +115,13 @@ listen<StateEvent>("state", (e) => {
 });
 
 // Design/debug aid: drive the pill from the browser console or a preview without Tauri.
-// window.__stfuDemo("recording" | "processing" | "done" | "error")
+// window.__stfuDemo("recording" | "processing" | "done" | "error", message?)
 let demoTimer: number | undefined;
 (window as unknown as { __stfuDemo: (p: Phase, m?: string) => void }).__stfuDemo = (p, m) => {
   if (demoTimer) { clearInterval(demoTimer); demoTimer = undefined; }
   if (p !== phase) phaseStart = performance.now();
   phase = p;
-  pill.className = p;
-  msg.textContent = p === "error" ? (m ?? "Something went wrong") : "";
+  showMessage(p, m);
   if (p === "recording") {
     levels.fill(0); shown.fill(0);
     demoTimer = window.setInterval(() => {

@@ -83,6 +83,33 @@ pub struct Config {
     /// Local dictation history (see history.rs). Never leaves the machine.
     #[serde(default)]
     pub history: HistoryConfig,
+    /// Whether a dictation stays on the clipboard after it is pasted.
+    #[serde(default)]
+    pub clipboard: ClipboardMode,
+}
+
+/// Pasting goes through the clipboard and then puts back what was there before. This decides
+/// when the dictation is left there instead.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClipboardMode {
+    /// Only when no text field had focus, so the text is not lost. Where that cannot be told
+    /// (Chrome and Electron apps) the old clipboard comes back, as before.
+    #[default]
+    WhenNoTextField,
+    Always,
+    /// Always put the previous clipboard back.
+    Never,
+}
+
+impl ClipboardMode {
+    pub fn keeps(self, focus: crate::focus::Focus) -> bool {
+        match self {
+            ClipboardMode::Always => true,
+            ClipboardMode::Never => false,
+            ClipboardMode::WhenNoTextField => focus == crate::focus::Focus::NoTextField,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -199,6 +226,7 @@ impl Default for Config {
             launch_at_login: true,
             auto_update: true,
             history: HistoryConfig::default(),
+            clipboard: ClipboardMode::default(),
         }
     }
 }

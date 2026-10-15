@@ -17,14 +17,14 @@ interface Rec {
     enabled?: boolean; base_url?: string; model?: string; wire?: string; duration_ms?: number;
     prompt?: string; reply?: string; cleaned?: string; error?: string; fell_back?: boolean;
   };
-  output?: { text?: string; pasted?: boolean; paste_ms?: number; paste_error?: string };
+  output?: { text?: string; pasted?: boolean; paste_ms?: number; paste_error?: string; focus?: string; on_clipboard?: boolean };
   total_ms?: number;
 }
 interface Day { day: string; count: number }
 export interface HistoryConfig { enabled: boolean; save_audio: boolean; keep_days: number; max_mb: number; confirm_cleanup: boolean }
-interface Usage { total_bytes: number; audio_bytes: number; text_bytes: number; days: number; oldest_day: string | null }
+interface Usage { total_bytes: number; audio_bytes: number; text_bytes: number; days: number; oldest_day: string | null; compressible_bytes: number }
 interface Plan { expired_days: string[]; audio_days: string[]; frees_bytes: number }
-interface Status { path: string; usage: Usage; plan: Plan; near_limit: boolean }
+interface Status { path: string; usage: Usage; plan: Plan; near_limit: boolean; compressing: boolean }
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -121,6 +121,7 @@ function card(r: Rec): HTMLElement {
   const time = new Date(r.ts);
   meta.append(el("span", "time", isNaN(time.getTime()) ? r.ts : time.toLocaleTimeString()), outcomeBadge(r));
   if (r.target_app?.name) meta.append(el("span", "", `→ ${r.target_app.name}`));
+  if (r.output?.on_clipboard) meta.append(el("span", "badge", "on clipboard"));
   if (r.profile) meta.append(el("span", "", r.profile));
   const timing = [
     r.audio?.duration_ms !== undefined ? `${secs(r.audio.duration_ms)} audio` : "",
@@ -194,6 +195,8 @@ function card(r: Rec): HTMLElement {
       [
         ["into", r.target_app ? `${r.target_app.name}${r.target_app.bundle_id ? ` (${r.target_app.bundle_id})` : ""}` : undefined],
         ["pasted", r.output ? (r.output.pasted ? "yes" : "no") : undefined],
+        ["focus", { text_field: "a text field", no_text_field: "no text field", unknown: "unknown (app does not say)" }[r.output?.focus ?? ""] ?? r.output?.focus],
+        ["left on clipboard", r.output?.on_clipboard ? "yes" : undefined],
         ["took", secs(r.output?.paste_ms)],
         ["error", r.output?.paste_error ?? r.error],
       ],
@@ -298,10 +301,21 @@ function renderStatus(st: Status) {
   meter.hidden = !limit;
   meter.className = `meter ${share >= 1 ? "over" : st.near_limit ? "warn" : ""}`;
 
+  // Compression: running, or available for recordings from before today.
+  const canCompress = u.compressible_bytes > 0;
+  $("hist-compress-row").hidden = !st.compressing && !canCompress;
+  $<HTMLButtonElement>("hist-compress").hidden = st.compressing;
+  $("hist-compress-text").textContent = st.compressing
+    ? "Compressing older recordings…"
+    : `${mb(u.compressible_bytes)} of older recordings can be compressed losslessly, to about half that.`;
+
   const banner = $("hist-banner");
-  const pending = st.plan.expired_days.length + st.plan.audio_days.length > 0;
+  const pending = !st.compressing && st.plan.expired_days.length + st.plan.audio_days.length > 0;
   $("hist-banner-actions").hidden = !pending;
-  if (pending) {
+  if (st.compressing) {
+    banner.className = "banner";
+    $("hist-banner-text").textContent = "Recordings from before today are being compressed (lossless: they play back exactly as recorded). Nothing is deleted.";
+  } else if (pending) {
     banner.className = `banner ${share >= 1 ? "over" : ""}`;
     $("hist-banner-text").textContent = opts.confirm_cleanup
       ? `History is past its limits. Waiting for your OK to delete ${describe(st.plan, opts)}.`
@@ -309,9 +323,9 @@ function renderStatus(st: Status) {
   } else if (st.near_limit) {
     banner.className = "banner";
     $("hist-banner-text").textContent =
-      `History is at ${Math.round(share * 100)}% of its ${opts.max_mb} MB limit. Past it, the oldest recordings ${opts.confirm_cleanup ? "will be offered for deletion" : "are deleted automatically"}; raise the limit or turn off "Keep the audio too" to avoid that.`;
+      `History is at ${Math.round(share * 100)}% of its ${opts.max_mb} MB limit${canCompress ? "" : ", and older recordings are already compressed"}. Past it, the oldest recordings ${opts.confirm_cleanup ? "will be offered for deletion" : "are deleted automatically"}; raise the limit or turn off "Keep the audio too" to avoid that.`;
   }
-  banner.hidden = !pending && !st.near_limit;
+  banner.hidden = !st.compressing && !pending && !st.near_limit;
 }
 
 async function refreshStatus() {
@@ -347,6 +361,14 @@ async function cleanupNow() {
   }
 }
 
+async function compressNow() {
+  try {
+    renderStatus(await invoke<Status>("history_compress"));
+  } catch (e) {
+    status(String(e), "err");
+  }
+}
+
 let loaded = false;
 
 /** Called when the History tab is shown. */
@@ -365,6 +387,7 @@ for (const id of ["hist-enabled", "hist-audio", "hist-days", "hist-max", "hist-c
   $(id).addEventListener("change", () => void saveOptions());
 }
 $("hist-cleanup").addEventListener("click", () => void cleanupNow());
+$("hist-compress").addEventListener("click", () => void compressNow());
 $("hist-folder").addEventListener("click", () => invoke("history_open_folder").catch((e) => status(String(e), "err")));
 $("hist-delete").addEventListener("click", async () => {
   const day = $<HTMLSelectElement>("hist-day").value;

@@ -12,7 +12,10 @@ interface Config {
   launch_at_login: boolean;
   auto_update: boolean;
   history: HistoryConfig;
+  clipboard?: ClipboardMode;
 }
+type ClipboardMode = "when_no_text_field" | "always" | "never";
+interface LastDictation { text: string; ts: string; app: string | null }
 interface LocalStatus { ollama_up: boolean; ollama_models: string[]; whisper_up: boolean }
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -194,6 +197,7 @@ function collect(): Config {
     auto_update: $<HTMLInputElement>("auto-update").checked,
     // Owned by the History tab, which saves it on its own; carry the live values through.
     history: historyOptions(),
+    clipboard: $<HTMLSelectElement>("clipboard-mode").value as ClipboardMode,
   };
 }
 
@@ -303,6 +307,8 @@ async function load() {
   $("hotkey").textContent = cfg.hotkey.join(" + ");
   $<HTMLInputElement>("auto-update").checked = cfg.auto_update ?? true;
   applyHistoryConfig(cfg.history);
+  $<HTMLSelectElement>("clipboard-mode").value = cfg.clipboard ?? "when_no_text_field";
+  showLast(await invoke<LastDictation | null>("last_dictation"));
   $("app-version").textContent = `version ${await invoke<string>("app_version")}`;
 
   editing = cfg.active_profile || cfg.profiles[0].name;
@@ -315,6 +321,27 @@ async function load() {
   const p = profileByName(editing);
   if (!p.stt.api_key) setStatus("stt-status", "No key yet. Click “Get a key”, paste it here, then Test.");
   if (!p.llm.api_key && p.llm.enabled) setStatus("llm-status", "No key yet. Click “Get a key”, paste it here, then Test.");
+}
+
+function showLast(last: LastDictation | null) {
+  const text = $("last-text");
+  text.textContent = last?.text || "Nothing dictated yet.";
+  text.classList.toggle("muted", !last?.text);
+  $<HTMLButtonElement>("last-copy").disabled = !last?.text;
+  const when = last ? new Date(last.ts) : null;
+  $("last-meta").textContent = when && !isNaN(when.getTime())
+    ? `${when.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}${last?.app ? ` · ${last.app}` : ""}`
+    : "";
+  setStatus("last-status", "");
+}
+
+async function copyLast() {
+  try {
+    await invoke("copy_text", { text: $("last-text").textContent ?? "" });
+    setStatus("last-status", "Copied.", "ok");
+  } catch (e) {
+    setStatus("last-status", String(e), "err");
+  }
 }
 
 function toggleShow(inputId: string) {
@@ -409,6 +436,18 @@ $("llm-show").addEventListener("click", () => toggleShow("llm-key"));
 $("stt-test").addEventListener("click", () => test("stt"));
 $("llm-test").addEventListener("click", () => test("llm"));
 $("save").addEventListener("click", save);
+$("last-copy").addEventListener("click", () => void copyLast());
+$("clipboard-mode").addEventListener("change", async (e) => {
+  const mode = (e.target as HTMLSelectElement).value as ClipboardMode;
+  try {
+    await invoke("set_clipboard_mode", { mode });
+    cfg.clipboard = mode;
+    setStatus("last-status", "Saved.", "ok");
+  } catch (err) {
+    setStatus("last-status", String(err), "err");
+  }
+});
+listen<LastDictation>("last-dictation", (e) => showLast(e.payload));
 $("stt-getkey").addEventListener("click", () => invoke("open_url", { url: STT_PRESETS[$<HTMLSelectElement>("stt-provider").value].keyUrl }));
 $("llm-getkey").addEventListener("click", () => invoke("open_url", { url: LLM_PRESETS[$<HTMLSelectElement>("llm-provider").value].keyUrl }));
 // Save on Cmd/Ctrl+S too.

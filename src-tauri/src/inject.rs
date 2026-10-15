@@ -1,16 +1,20 @@
-//! Puts text where the cursor is: clipboard + synthetic paste keystroke, then restores the clipboard.
+//! Puts text where the cursor is: clipboard + synthetic paste keystroke, then restores the
+//! clipboard unless the text should stay there.
 
 use anyhow::{Context, Result};
 use std::thread::sleep;
 use std::time::Duration;
 
-pub fn paste(text: &str) -> Result<()> {
+pub fn paste(text: &str, keep_on_clipboard: bool) -> Result<()> {
     let mut clipboard = arboard::Clipboard::new().context("opening clipboard")?;
     let previous = clipboard.get_text().ok();
     clipboard.set_text(text.to_string()).context("writing clipboard")?;
     sleep(Duration::from_millis(60));
 
     send_paste_keystroke()?;
+    if keep_on_clipboard {
+        return Ok(());
+    }
 
     // Give the target app time to read the clipboard before we put the old content back.
     sleep(Duration::from_millis(250));
