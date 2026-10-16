@@ -108,10 +108,16 @@ pub async fn zen_models(api_key: String) -> Result<Vec<ModelInfo>, String> {
     if !api_key.trim().is_empty() {
         req = req.bearer_auth(api_key.trim());
     }
-    let v: serde_json::Value = req
+    let res = req
         .send()
         .await
-        .map_err(|e| format!("could not reach OpenCode Zen: {e}"))?
+        .map_err(|e| format!("could not reach OpenCode Zen: {e}"))?;
+    if res.status() == reqwest::StatusCode::UNAUTHORIZED {
+        return Err("OpenCode rejected this key. Copy a new one from opencode.ai/zen.".into());
+    }
+    let v: serde_json::Value = res
+        .error_for_status()
+        .map_err(|e| format!("OpenCode Zen refused the model list: {e}"))?
         .json()
         .await
         .map_err(|e| format!("unexpected response from OpenCode Zen: {e}"))?;
