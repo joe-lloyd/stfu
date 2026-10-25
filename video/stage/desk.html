@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>STFU stage</title>
+<style>
+  :root { color-scheme: dark; --cyan: #7dd3fc; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; width: 1280px; height: 720px; overflow: hidden; font: 13px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif; color: #e8e8ec; }
+  body { position: relative; }
+  #wall { position: absolute; inset: 0; background:
+    radial-gradient(1100px 650px at 78% 0%, rgba(125,211,252,0.20), transparent 62%),
+    radial-gradient(900px 600px at 0% 100%, rgba(245,39,108,0.13), transparent 60%),
+    linear-gradient(160deg, #0e1424, #0a0b11 70%); }
+  #wall svg { position: absolute; left: 0; right: 0; bottom: 0; opacity: 0.10; }
+  body.win #wall { background: radial-gradient(900px 520px at 50% 115%, #3b82f6, transparent 70%), radial-gradient(700px 500px at 20% 0%, #1e3a8a, transparent 70%), linear-gradient(180deg, #0b1530, #091024); }
+
+  /* macOS menu bar */
+  #menubar { position: absolute; left: 0; right: 0; top: 0; height: 26px; display: flex; align-items: center; gap: 18px; padding: 0 14px; background: rgba(18,18,24,0.55); backdrop-filter: blur(20px); font-size: 13px; z-index: 50; }
+  #menubar .apple { width: 14px; height: 16px; }
+  #menubar .app { font-weight: 700; }
+  #menubar .spacer { flex: 1; }
+  #tray { width: 26px; height: 22px; display: grid; place-items: center; border-radius: 5px; }
+  #tray.open { background: rgba(255,255,255,0.18); }
+  body.win #menubar { display: none; }
+
+  /* The tray menu, drawn after STFU's native one in src-tauri/src/lib.rs. */
+  #traymenu { position: absolute; top: 28px; width: 236px; padding: 5px; border-radius: 9px; background: rgba(40,40,46,0.92); backdrop-filter: blur(24px); border: 1px solid rgba(255,255,255,0.12); box-shadow: 0 14px 40px rgba(0,0,0,0.5); z-index: 60; display: none; }
+  #traymenu.open { display: block; }
+  #traymenu .item { display: flex; align-items: center; padding: 3px 8px 3px 22px; border-radius: 5px; position: relative; height: 24px; }
+  #traymenu .item.hl { background: #2f6fde; }
+  #traymenu .item .check { position: absolute; left: 7px; }
+  #traymenu .item .arrow { margin-left: auto; opacity: 0.7; }
+  #traymenu .sep { height: 1px; background: rgba(255,255,255,0.12); margin: 5px 8px; }
+
+  /* Windows */
+  .window { position: absolute; border-radius: 11px; background: #1d1d21; border: 1px solid rgba(255,255,255,0.12); box-shadow: 0 30px 80px rgba(0,0,0,0.55), 0 0 0 0.5px rgba(0,0,0,0.6); overflow: hidden; display: none; flex-direction: column; }
+  .window.shown { display: flex; }
+  .titlebar { height: 30px; flex: none; display: flex; align-items: center; padding: 0 12px; background: #2a2a30; border-bottom: 1px solid rgba(0,0,0,0.4); position: relative; }
+  .lights { display: flex; gap: 8px; }
+  .lights i { width: 12px; height: 12px; border-radius: 50%; display: block; }
+  .lights i:nth-child(1) { background: #ff5f57; } .lights i:nth-child(2) { background: #febc2e; } .lights i:nth-child(3) { background: #28c840; }
+  .titlebar .title { position: absolute; left: 0; right: 0; text-align: center; font-weight: 600; color: #c8c8d0; pointer-events: none; }
+  textarea { font: inherit; color: inherit; background: transparent; border: 0; outline: none; resize: none; width: 100%; caret-color: var(--cyan); }
+
+  #win-mail { left: 190px; top: 70px; width: 900px; height: 520px; }
+  #win-mail .fields { padding: 4px 20px; border-bottom: 1px solid #2c2c34; }
+  #win-mail .field { display: flex; gap: 10px; padding: 8px 0; border-bottom: 1px solid #26262c; color: #9a9aa5; }
+  #win-mail .field:last-child { border-bottom: 0; }
+  #win-mail .field b { color: #e8e8ec; font-weight: 500; }
+  #win-mail .toolbar { display: flex; gap: 10px; padding: 8px 20px; border-bottom: 1px solid #2c2c34; }
+  #win-mail .toolbar span { padding: 3px 12px; border-radius: 6px; background: #2a2a33; color: #c8c8d0; }
+  #win-mail .toolbar span.send { background: #2f6fde; color: white; }
+  #mail-body { flex: 1; padding: 18px 22px; font-size: 16px; line-height: 1.6; }
+
+  #win-notes { left: 150px; top: 60px; width: 980px; height: 560px; }
+  #win-notes .cols { flex: 1; display: flex; min-height: 0; }
+  #win-notes .list { width: 250px; border-right: 1px solid #2c2c34; background: #19191d; padding: 10px; }
+  #win-notes .note { padding: 9px 12px; border-radius: 8px; margin-bottom: 4px; }
+  #win-notes .note b { display: block; }
+  #win-notes .note span { color: #8a8a95; font-size: 12px; }
+  #win-notes .note.active { background: #6b5419; }
+  #win-notes .editor { flex: 1; padding: 22px 30px; display: flex; flex-direction: column; }
+  #win-notes .editor h1 { font-size: 26px; margin: 0 0 12px; }
+  #notes-body { flex: 1; font-size: 17px; line-height: 1.65; }
+
+  #win-chat { left: 210px; top: 66px; width: 860px; height: 540px; background: #1a1d21; }
+  #win-chat .cols { flex: 1; display: flex; min-height: 0; }
+  #win-chat .side { width: 210px; background: #19171d; padding: 14px 10px; color: #b6b6c0; border-right: 1px solid #2c2c34; }
+  #win-chat .side div { padding: 4px 10px; border-radius: 6px; }
+  #win-chat .side .active { background: #1164a3; color: white; }
+  #win-chat .side .ws { font-weight: 800; color: white; font-size: 15px; margin-bottom: 10px; }
+  #win-chat .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  #win-chat .head { padding: 12px 18px; font-weight: 700; font-size: 15px; border-bottom: 1px solid #2c2c34; }
+  #chat-log { flex: 1; padding: 14px 18px; display: flex; flex-direction: column; justify-content: flex-end; gap: 14px; overflow: hidden; }
+  .msg { display: flex; gap: 10px; }
+  .msg .av { width: 36px; height: 36px; border-radius: 8px; flex: none; display: grid; place-items: center; font-weight: 700; color: #111; }
+  .msg .who { font-weight: 700; } .msg .who span { color: #8a8a95; font-weight: 400; font-size: 12px; margin-left: 6px; }
+  .msg .body { font-size: 15px; white-space: pre-wrap; }
+  #win-chat .compose { margin: 0 18px 16px; border: 1px solid #50505a; border-radius: 9px; padding: 10px 12px; }
+  #chat-input { height: 44px; font-size: 15px; }
+
+  #win-settings { left: 340px; top: 34px; width: 600px; height: 676px; background: #16161a; }
+  #win-settings iframe { flex: 1; border: 0; width: 100%; background: #16161a; }
+
+  /* Windows 11 */
+  #taskbar { position: absolute; left: 0; right: 0; bottom: 0; height: 48px; background: rgba(28,30,38,0.88); backdrop-filter: blur(30px); border-top: 1px solid rgba(255,255,255,0.08); display: none; align-items: center; justify-content: center; gap: 6px; z-index: 40; }
+  body.win #taskbar { display: flex; }
+  #taskbar .ic { width: 40px; height: 40px; border-radius: 6px; display: grid; place-items: center; }
+  #taskbar .ic.on { background: rgba(255,255,255,0.08); }
+  #taskbar .clock { position: absolute; right: 14px; text-align: right; font-size: 12px; line-height: 1.35; }
+  #win-notepad { left: 0; top: 0; right: 0; bottom: 48px; border-radius: 0; border: 0; background: #202020; font-family: "Segoe UI", system-ui, sans-serif; }
+  #win-notepad .wtitle { height: 34px; display: flex; align-items: center; padding-left: 14px; gap: 10px; background: #202020; font-size: 12px; }
+  #win-notepad .wtitle .ctl { margin-left: auto; display: flex; }
+  #win-notepad .wtitle .ctl span { width: 46px; height: 34px; display: grid; place-items: center; color: #ddd; font-size: 14px; }
+  #win-notepad .menu { display: flex; gap: 4px; padding: 2px 8px; border-bottom: 1px solid #333; font-size: 13px; }
+  #win-notepad .menu span { padding: 4px 10px; }
+  #notepad-body { flex: 1; padding: 14px 18px; font: 17px/1.55 Consolas, "Cascadia Mono", Menlo, monospace; background: #272727; }
+  #win-notepad .status { height: 26px; display: flex; gap: 26px; align-items: center; padding: 0 14px; font-size: 12px; color: #aaa; border-top: 1px solid #333; }
+
+  /* The real pill, src/main.ts in index.html, at its real window size of 190 by 40. */
+  #pill { color-scheme: normal; position: absolute; left: calc(50% - 95px); bottom: 54px; width: 190px; height: 40px; border: 0; background: transparent; z-index: 100; visibility: hidden; }
+  #pill.shown { visibility: visible; }
+  body.win #pill { bottom: 62px; }
+</style>
+</head>
+<body>
+  <div id="wall">
+    <svg width="1280" height="260" viewBox="0 0 1280 260" preserveAspectRatio="none" id="wallbars"></svg>
+  </div>
+
+  <div id="menubar">
+    <svg class="apple" viewBox="0 0 14 17"><path fill="#eee" d="M11.6 9c0-2 1.6-2.9 1.7-3-1-1.4-2.4-1.6-2.9-1.6-1.2-.1-2.4.7-3 .7-.6 0-1.6-.7-2.6-.7C3.5 4.4 2.2 5.2 1.5 6.5 0 9.1 1.1 12.9 2.6 15c.7 1 1.5 2.1 2.6 2.1 1 0 1.4-.7 2.7-.7 1.2 0 1.6.7 2.7.6 1.1 0 1.8-1 2.5-2 .8-1.1 1.1-2.2 1.1-2.3 0 0-2.6-1-2.6-3.7zM9.6 2.9c.6-.7 1-1.6.8-2.6-.8 0-1.8.5-2.4 1.2-.5.6-1 1.6-.9 2.5.9.1 1.9-.4 2.5-1.1z"/></svg>
+    <span class="app" id="appname">Finder</span>
+    <span>File</span><span>Edit</span><span>View</span><span>Window</span><span>Help</span>
+    <span class="spacer"></span>
+    <span id="tray" title="stfu"><svg width="16" height="14" viewBox="0 0 16 14"><rect x="1" y="4" width="2" height="6" rx="1" fill="#eee"/><rect x="4.5" y="2" width="2" height="10" rx="1" fill="#eee"/><rect x="8" y="0" width="2" height="14" rx="1" fill="#eee"/><rect x="11.5" y="2" width="2" height="10" rx="1" fill="#eee"/><rect x="15" y="4" width="1" height="6" rx=".5" fill="#eee"/></svg></span>
+    <svg width="16" height="12" viewBox="0 0 16 12"><path d="M8 11.5 1 4.2a10 10 0 0 1 14 0z" fill="#eee"/></svg>
+    <svg width="24" height="12" viewBox="0 0 24 12"><rect x=".5" y=".5" width="20" height="11" rx="3" fill="none" stroke="#ccc"/><rect x="2" y="2" width="14" height="8" rx="1.5" fill="#eee"/><rect x="21.5" y="4" width="1.6" height="4" rx=".8" fill="#ccc"/></svg>
+    <span id="clock">Sun 25 Oct 10:42</span>
+  </div>
+
+  <div id="traymenu">
+    <div class="item" data-item="settings">Settings…</div>
+    <div class="item" data-item="copy-last">Copy last dictation</div>
+    <div class="item" data-item="profile">Profile: Cloud (free)<span class="arrow">›</span></div>
+    <div class="item" data-item="language">Language: English<span class="arrow">›</span></div>
+    <div class="item" data-item="autostart"><span class="check">✓</span>Launch at login</div>
+    <div class="sep"></div>
+    <div class="item" data-item="update">Check for updates</div>
+    <div class="item" data-item="quit">Quit stfu</div>
+  </div>
+
+  <section class="window" id="win-mail" data-app="Mail">
+    <div class="titlebar"><div class="lights"><i></i><i></i><i></i></div><div class="title">Standup next week</div></div>
+    <div class="toolbar"><span class="send">Send</span><span>Attach</span><span>Format</span></div>
+    <div class="fields">
+      <div class="field">To: <b>team@lumen.dev</b></div>
+      <div class="field">Subject: <b>Standup next week</b></div>
+    </div>
+    <textarea id="mail-body" spellcheck="false">Hi all,
+
+</textarea>
+  </section>
+
+  <section class="window" id="win-notes" data-app="Notes">
+    <div class="titlebar"><div class="lights"><i></i><i></i><i></i></div><div class="title">Notes</div></div>
+    <div class="cols">
+      <div class="list">
+        <div class="note active"><b>Release 0.9.2</b><span>10:41 · Plan</span></div>
+        <div class="note"><b>Groceries</b><span>Yesterday</span></div>
+        <div class="note"><b>Video ideas</b><span>Friday</span></div>
+        <div class="note"><b>Pill on Windows</b><span>21/10/2026</span></div>
+      </div>
+      <div class="editor">
+        <h1>Release 0.9.2</h1>
+        <textarea id="notes-body" spellcheck="false"></textarea>
+      </div>
+    </div>
+  </section>
+
+  <section class="window" id="win-chat" data-app="Chat">
+    <div class="titlebar"><div class="lights"><i></i><i></i><i></i></div><div class="title">Chat</div></div>
+    <div class="cols">
+      <div class="side"><div class="ws">Lumen</div><div># general</div><div class="active"># desktop-app</div><div># releases</div><div style="margin-top:12px">Anna Berg</div><div>Sam Okafor</div></div>
+      <div class="main">
+        <div class="head"># desktop-app</div>
+        <div id="chat-log">
+          <div class="msg"><div class="av" style="background:#f6ad55">S</div><div><div class="who">Sam Okafor<span>10:31</span></div><div class="body">Windows build is green on CI now.</div></div></div>
+          <div class="msg"><div class="av" style="background:#9ae6b4">A</div><div><div class="who">Anna Berg<span>10:39</span></div><div class="body">Nice. Joe, when can you push the pill fix?</div></div></div>
+        </div>
+        <div class="compose"><textarea id="chat-input" placeholder="Message #desktop-app" spellcheck="false"></textarea></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="window" id="win-settings" data-app="stfu">
+    <div class="titlebar"><div class="lights"><i></i><i></i><i></i></div><div class="title">stfu settings</div></div>
+    <iframe id="settings-frame" title="settings"></iframe>
+  </section>
+
+  <section class="window" id="win-notepad" data-app="Notepad">
+    <div class="wtitle"><svg width="16" height="16" viewBox="0 0 16 16"><rect x="2" y="1" width="12" height="14" rx="2" fill="#60a5fa"/><rect x="4.5" y="4" width="7" height="1.4" fill="#fff"/><rect x="4.5" y="7" width="7" height="1.4" fill="#fff"/><rect x="4.5" y="10" width="5" height="1.4" fill="#fff"/></svg>release-notes.txt - Notepad<div class="ctl"><span>&#x2013;</span><span>&#x25A1;</span><span>&#x2715;</span></div></div>
+    <div class="menu"><span>File</span><span>Edit</span><span>View</span></div>
+    <textarea id="notepad-body" spellcheck="false">Release notes, v0.9.2
+
+- Keep the recording pill above every other window
+- Say when OpenCode rejects the key
+
+</textarea>
+    <div class="status"><span>Ln 6, Col 1</span><span>100%</span><span>Windows (CRLF)</span><span>UTF-8</span></div>
+  </section>
+
+  <div id="taskbar">
+    <div class="ic"><svg width="22" height="22" viewBox="0 0 22 22"><rect x="1" y="1" width="9.5" height="9.5" rx="1" fill="#4cc2ff"/><rect x="11.5" y="1" width="9.5" height="9.5" rx="1" fill="#4cc2ff"/><rect x="1" y="11.5" width="9.5" height="9.5" rx="1" fill="#4cc2ff"/><rect x="11.5" y="11.5" width="9.5" height="9.5" rx="1" fill="#4cc2ff"/></svg></div>
+    <div class="ic"><svg width="22" height="22" viewBox="0 0 22 22"><circle cx="9" cy="9" r="6" fill="none" stroke="#ddd" stroke-width="2"/><path d="m13.5 13.5 5 5" stroke="#ddd" stroke-width="2"/></svg></div>
+    <div class="ic"><svg width="22" height="22" viewBox="0 0 22 22"><path d="M2 6h7l2 2h9v11H2z" fill="#f7c948"/></svg></div>
+    <div class="ic on"><svg width="20" height="22" viewBox="0 0 16 16"><rect x="2" y="1" width="12" height="14" rx="2" fill="#60a5fa"/><rect x="4.5" y="4" width="7" height="1.4" fill="#fff"/><rect x="4.5" y="7" width="7" height="1.4" fill="#fff"/></svg></div>
+    <div class="clock" id="winclock"></div>
+  </div>
+
+  <iframe id="pill" title="pill" allowtransparency="true"></iframe>
+
+  <script type="module" src="./stage.ts"></script>
+</body>
+</html>
