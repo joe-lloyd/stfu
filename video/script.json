@@ -1,0 +1,293 @@
+{
+  "title": "STFU",
+  "subtitle": "Hold a key, talk, release",
+  "youtube": {
+    "title": "STFU: hold a key, talk, and clean text lands where you type",
+    "thumbTitle": "STFU",
+    "thumbKicker": "Hold a key. Talk. Done.",
+    "thumbFrom": "1.4"
+  },
+  "dictations": {
+    "d1": {
+      "voice": "am_michael",
+      "say": "um, so I wanted to check if we can, uh, move the standup to Tuesday. No, Wednesday. Because, like, half the team is out on Tuesday.",
+      "cleaned": "Can we move the standup to Wednesday? Half the team is out on Tuesday.",
+      "app": "Mail"
+    },
+    "d2": {
+      "voice": "am_michael",
+      "say": "okay, so for the release we need three things. uh, the changelog, um, the new icons, and and a smoke test on Windows.",
+      "cleaned": "For the release we need three things:\n- the changelog\n- the new icons\n- a smoke test on Windows",
+      "app": "Notes"
+    },
+    "d3": {
+      "voice": "am_michael",
+      "say": "yeah I'll, um, I'll push the fix tonight. Actually no, tomorrow morning, uh, right after the standup.",
+      "cleaned": "Yeah, I'll push the fix tomorrow morning, right after the standup.",
+      "app": "Chat"
+    },
+    "d4": {
+      "voice": "am_michael",
+      "say": "uh, remind me to renew the domain before, um, the end of the month.",
+      "cleaned": "Remind me to renew the domain before the end of the month.",
+      "app": "Finder"
+    },
+    "d5": {
+      "voice": "am_michael",
+      "say": "so the build, uh, the build on Windows is green now, um, and the installer clears the quarantine flag.",
+      "cleaned": "The build on Windows is green now, and the installer clears the quarantine flag.",
+      "app": "Notepad"
+    }
+  },
+  "sections": [
+    {
+      "title": "Hold a key and talk",
+      "intent": "Say what STFU is and why I built it, then show one dictation from start to finish.",
+      "lines": [
+        {
+          "say": "This is STFU. You hold a key, talk, and let go. A moment later, clean text lands wherever your cursor is.",
+          "show": "Title card with the waveform logo.",
+          "fx": { "name": "StfuTitle", "props": { "title": "STFU", "subtitle": "Hold a key, talk, release", "footer": "github.com/joe-lloyd/stfu" } }
+        },
+        {
+          "say": "I built it because I talk faster than I type, and the dictation I tried kept every um and every false start in the text.",
+          "show": "A desktop with a mail compose window. The cursor clicks into the body.",
+          "take": "open"
+        },
+        {
+          "say": "Here's what it looks like. I'm writing to the team, so I click into the email, hold Fn, and say it.",
+          "show": "Hold Fn: the pill appears and its waveform follows the speech. Release: processing, then the text is pasted.",
+          "take": "open"
+        },
+        {
+          "say": "The ums are gone, the correction from Tuesday to Wednesday is applied, and the punctuation is fixed. My voice went into the email in about a second.",
+          "show": "Zoom on the pasted sentence.",
+          "take": "open"
+        }
+      ]
+    },
+    {
+      "title": "How it works",
+      "intent": "The pipeline from hotkey to paste, with the endpoints.",
+      "lines": [
+        {
+          "say": "Here's what happened. Holding the hotkey starts the microphone, and the pill at the bottom of the screen shows a live waveform so you know it's listening.",
+          "show": "Diagram: hotkey and microphone light up.",
+          "fx": { "name": "StfuDiagram", "props": { "step": 1 } }
+        },
+        {
+          "say": "When I let go, the recording goes to a speech to text model. Any OpenAI compatible transcription endpoint works. The default is Whisper large v3 turbo on Groq.",
+          "show": "Diagram: speech to text, with the audio transcriptions endpoint.",
+          "fx": { "name": "StfuDiagram", "props": { "step": 2 } }
+        },
+        {
+          "say": "The raw transcript then goes to a language model with one job: clean it up. It removes fillers, applies corrections, fixes punctuation and turns spoken lists into bullets. It never answers what you said.",
+          "show": "Diagram: LLM cleanup, with the chat completions endpoint and the rules.",
+          "fx": { "name": "StfuDiagram", "props": { "step": 3 } }
+        },
+        {
+          "say": "Then STFU puts the text on the clipboard, presses paste in the app you were using, and puts your old clipboard back.",
+          "show": "Diagram: paste into the focused app.",
+          "fx": { "name": "StfuDiagram", "props": { "step": 4 } }
+        },
+        {
+          "say": "If the cleanup call fails or times out, the raw transcript is pasted instead, so a dictation is never lost. The core is Rust on Tauri, and the pill and the settings window are two small web views.",
+          "show": "Diagram: the fallback path from speech to text straight to paste.",
+          "fx": { "name": "StfuDiagram", "props": { "step": 5 } }
+        }
+      ]
+    },
+    {
+      "title": "Lists and corrections",
+      "intent": "Show the cleanup rules on a list and a self-correction, in two more apps.",
+      "lines": [
+        {
+          "say": "Lists are where it saves me the most typing. Here I'm planning a release in my notes.",
+          "show": "A notes app with a heading. Hold Fn and dictate three items.",
+          "take": "rules"
+        },
+        {
+          "say": "I said three things in one breath, and they came out as a bulleted list.",
+          "show": "Zoom on the bullets.",
+          "take": "rules"
+        },
+        {
+          "say": "It works in any app that accepts a paste. Here's a quick reply in a chat window.",
+          "show": "A chat app. Click the message box, hold Fn, dictate a reply that corrects itself.",
+          "take": "rules"
+        },
+        {
+          "say": "I changed my mind halfway through, and only the final answer was kept.",
+          "show": "Zoom on the reply.",
+          "take": "rules"
+        }
+      ]
+    },
+    {
+      "title": "Providers and settings",
+      "intent": "Settings from the menu bar: permissions, speech to text, cleanup providers, profiles.",
+      "lines": [
+        {
+          "say": "Everything else lives in Settings, which opens from the icon in the menu bar.",
+          "show": "Click the menu bar icon, then Settings.",
+          "take": "settings"
+        },
+        {
+          "say": "On a Mac it needs three permissions: microphone, input monitoring and accessibility. If one is missing, its row turns red, with a button that opens the right page in System Settings.",
+          "show": "Scroll to the permissions panel, all green.",
+          "take": "settings"
+        },
+        {
+          "say": "Speech to text comes next. Groq is the default, because one free Groq key covers both steps. OpenAI works too, and so do whisper.cpp and Speaches on your own machine.",
+          "show": "Click the provider list.",
+          "take": "settings"
+        },
+        {
+          "say": "Paste a key and press Test. It sends a short silent clip, so you know the key works before you rely on it.",
+          "show": "Click Test; it reports the model and the response time.",
+          "take": "settings"
+        },
+        {
+          "say": "The cleanup model has its own provider. The default is a Qwen model on Groq's free tier.",
+          "show": "Scroll to the cleanup section.",
+          "take": "settings"
+        },
+        {
+          "say": "OpenCode Zen gives you every model OpenCode hosts through one account. Connect OpenCode reuses the key from OpenCode's command line tool and lists the models live, free ones first.",
+          "show": "Pick OpenCode, click Connect OpenCode, the model list fills.",
+          "take": "settings"
+        },
+        {
+          "say": "If the key is wrong or has expired, it tells you so, instead of showing an empty list.",
+          "show": "Paste an old key; the error says OpenCode rejected it.",
+          "take": "settings"
+        },
+        {
+          "say": "For anything private, pick Ollama. Nothing leaves the machine, and Settings shows whether Ollama is running and which models you've pulled.",
+          "show": "Pick Ollama; the status says it's running with three models.",
+          "take": "settings"
+        },
+        {
+          "say": "A profile holds a whole set of providers. I keep a cloud profile for speed and a local one for anything sensitive, and switch between them here or from the menu bar.",
+          "show": "Scroll up, switch the profile to Local (offline), Save.",
+          "take": "settings"
+        }
+      ]
+    },
+    {
+      "title": "Nowhere to paste",
+      "intent": "Dictating with no text field keeps the text on the clipboard; the last dictation card.",
+      "lines": [
+        {
+          "say": "Sometimes there's nowhere to paste. Here nothing has focus. It's just the desktop.",
+          "show": "An empty desktop. Hold Fn and dictate.",
+          "take": "clipboard"
+        },
+        {
+          "say": "Instead of losing the words, STFU leaves them on the clipboard and says so in the pill. I can paste them wherever I end up.",
+          "show": "The pill says Copied to clipboard. Open Notes and paste.",
+          "take": "clipboard"
+        },
+        {
+          "say": "The last dictation is also one click away, at the top of Settings and in the menu bar. And you choose when the text stays on the clipboard.",
+          "show": "Settings: the Last dictation card and the clipboard option.",
+          "take": "clipboard"
+        }
+      ]
+    },
+    {
+      "title": "History",
+      "intent": "The History tab: entries, every stage, playback, limits that remove recordings only, lossless compression.",
+      "lines": [
+        {
+          "say": "Every dictation is saved to a history on your own machine, one file per day. Nothing is uploaded.",
+          "show": "Click the History tab.",
+          "take": "history"
+        },
+        {
+          "say": "Each entry shows what was pasted, which app it went to, and how long each step took.",
+          "show": "Zoom on the newest entry.",
+          "take": "history"
+        },
+        {
+          "say": "All stages opens the whole record: the recording, the raw transcript, exactly what the cleanup model was sent and what it replied, and the paste.",
+          "show": "Open All stages and scroll through it.",
+          "take": "history"
+        },
+        {
+          "say": "I can play the audio back, or copy the raw transcript and the full record.",
+          "show": "Point at Copy raw transcript and Copy JSON, then play the audio.",
+          "take": "history"
+        },
+        {
+          "say": "Transcripts are kept for good, because they're tiny. The limits only ever remove recordings, which take nearly all of the space.",
+          "show": "Scroll up to Storage and zoom on the limits.",
+          "take": "history"
+        },
+        {
+          "say": "Near the limit, older recordings are compressed to FLAC. That's lossless, so they play back exactly as recorded, at about half the size.",
+          "show": "Click Compress now; the meter drops.",
+          "take": "history"
+        },
+        {
+          "say": "Only when that isn't enough does it ask before deleting anything, and even then the transcripts stay.",
+          "show": "The storage meter and the Ask me before deleting option.",
+          "take": "history"
+        }
+      ]
+    },
+    {
+      "title": "On Windows",
+      "intent": "Ctrl+Win hotkey, the pill on top of every window.",
+      "lines": [
+        {
+          "say": "On Windows, the hotkey is Control plus the Windows key.",
+          "show": "A Windows desktop with Notepad maximized. Hold Ctrl+Win and dictate.",
+          "take": "windows"
+        },
+        {
+          "say": "The pill stays on top of every other window, so you can always see that it's listening.",
+          "show": "Zoom on the pill and the pasted text.",
+          "take": "windows"
+        }
+      ]
+    },
+    {
+      "title": "Updates and install",
+      "intent": "Auto-update, launch at login, the one-line installers.",
+      "lines": [
+        {
+          "say": "STFU updates itself. It checks GitHub releases shortly after launch and every six hours, checks the download's signature, installs it and restarts.",
+          "show": "Settings scrolled to Updates.",
+          "take": "updates"
+        },
+        {
+          "say": "Check for updates now does the same on demand. Updates keep the macOS permissions, so nothing needs granting again.",
+          "show": "Click Check for updates now: up to date.",
+          "take": "updates"
+        },
+        {
+          "say": "It also starts at login by default. You can turn that off from the menu bar.",
+          "show": "The menu bar menu with Launch at login ticked.",
+          "take": "updates"
+        },
+        {
+          "say": "Installing is one line. On a Mac or Linux, pipe the install script into sh. On Windows, run the PowerShell version. The builds aren't signed by Apple or Microsoft, so both scripts clear the download quarantine for you.",
+          "show": "Card with the two install commands.",
+          "fx": { "name": "StfuInstall", "props": {} }
+        }
+      ]
+    },
+    {
+      "title": "Wrap up",
+      "intent": "Close.",
+      "lines": [
+        {
+          "say": "That's STFU. The code and the installers are on GitHub, at joe-lloyd slash stfu. Thanks for watching.",
+          "show": "End card with the repository link.",
+          "fx": { "name": "StfuTitle", "props": { "title": "STFU", "subtitle": "github.com/joe-lloyd/stfu", "footer": "macOS · Windows · Linux" } }
+        }
+      ]
+    }
+  ]
+}
