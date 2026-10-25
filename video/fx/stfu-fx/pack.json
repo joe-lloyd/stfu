@@ -1,0 +1,69 @@
+{
+  "name": "stfu-fx",
+  "label": "STFU",
+  "version": "1.0.0",
+  "description": "Title, chapter label, pipeline diagram, install card and thumbnail in STFU's look: near-black panels, the pill's cyan wave, red, yellow and green for recording, processing and done.",
+  "author": "Joseph Lloyd",
+  "category": "STFU",
+  "tags": ["stfu", "dictation", "diagram", "title"],
+  "entry": "index.tsx",
+  "templates": [
+    {
+      "name": "StfuTitle",
+      "label": "STFU title",
+      "description": "Full-frame title with the app icon's bars breathing and the pill recording below.",
+      "defaultDurationSeconds": 6,
+      "category": "Titles",
+      "icon": "Type",
+      "fields": [
+        { "key": "title", "type": "text", "default": "STFU" },
+        { "key": "subtitle", "type": "text", "default": "Hold a key, talk, release" },
+        { "key": "footer", "type": "text", "default": "", "description": "Small cyan line at the bottom. Empty hides it." }
+      ]
+    },
+    {
+      "name": "StfuChapter",
+      "label": "STFU chapter",
+      "description": "Chapter label with a cyan number badge that slides in at the bottom left over footage.",
+      "defaultDurationSeconds": 3.5,
+      "category": "Titles",
+      "icon": "Tag",
+      "fields": [
+        { "key": "number", "type": "number", "default": 1, "min": 0, "max": 99 },
+        { "key": "title", "type": "text", "default": "Chapter" }
+      ]
+    },
+    {
+      "name": "StfuDiagram",
+      "label": "STFU pipeline",
+      "description": "Hotkey, microphone, speech to text, LLM cleanup and paste, with their endpoints. Step 1 lights the hotkey and microphone, 2 speech to text, 3 the cleanup and its rules, 4 paste, 5 the fallback path and the stack.",
+      "defaultDurationSeconds": 8,
+      "category": "Diagrams",
+      "icon": "Network",
+      "fields": [
+        { "key": "step", "type": "number", "default": 1, "min": 1, "max": 5, "step": 1 }
+      ]
+    },
+    {
+      "name": "StfuInstall",
+      "label": "STFU install",
+      "description": "The macOS/Linux and Windows one-line installers typed into terminal panels.",
+      "defaultDurationSeconds": 14,
+      "category": "Infographics",
+      "icon": "Terminal",
+      "fields": []
+    },
+    {
+      "name": "StfuThumbnail",
+      "label": "STFU thumbnail",
+      "description": "YouTube thumbnail over a frame of the video: icon, big title and kicker on a dark left panel.",
+      "defaultDurationSeconds": 5,
+      "category": "Titles",
+      "icon": "Image",
+      "fields": [
+        { "key": "title", "type": "text", "default": "STFU" },
+        { "key": "kicker", "type": "text", "default": "Hold a key. Talk. Done." }
+      ]
+    }
+  ]
+}
