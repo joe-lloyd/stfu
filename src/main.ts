@@ -48,6 +48,12 @@ function drawBars(heights: Float32Array, color: string, alpha = 1) {
 
 function frame(now: number) {
   const w = canvas.clientWidth, h = canvas.clientHeight;
+  // The wave is hidden while the pill shows a message. Drawing at zero size throws, which would
+  // skip the requestAnimationFrame below and freeze the wave for every later take.
+  if (w === 0 || h === 0) {
+    requestAnimationFrame(frame);
+    return;
+  }
   ctx.clearRect(0, 0, w, h);
   const t = (now - phaseStart) / 1000;
 
