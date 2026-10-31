@@ -9,8 +9,12 @@ mod inject;
 mod lang;
 mod llm;
 #[cfg(target_os = "macos")]
+mod meeting;
+#[cfg(target_os = "macos")]
 mod permissions;
 mod stt;
+#[cfg(target_os = "macos")]
+mod syscap;
 mod updater;
 
 use audio::Recorder;
@@ -71,6 +75,87 @@ fn copy_last_dictation() {
     match arboard::Clipboard::new().and_then(|mut c| c.set_text(last.text)) {
         Ok(()) => log::info!("copied the last dictation from {}", last.ts),
         Err(e) => log::warn!("could not copy the last dictation: {e}"),
+    }
+}
+
+#[cfg(target_os = "macos")]
+const START_MEETING: &str = "Start meeting transcript";
+
+/// Tray "Start/Stop meeting transcript". Starting needs the speech model and Screen Recording;
+/// without either, Settings opens on the Meetings tab, which explains and fixes both.
+#[cfg(target_os = "macos")]
+fn toggle_meeting(app: &AppHandle, item: &tauri::menu::MenuItem<tauri::Wry>) {
+    let (app, item) = (app.clone(), item.clone());
+    if meeting::running() {
+        let _ = item.set_text("Finishing meeting transcript…");
+        let _ = item.set_enabled(false);
+        std::thread::spawn(move || {
+            let result = meeting::stop();
+            let _ = item.set_text(START_MEETING);
+            let _ = item.set_enabled(true);
+            let done = result.map(|_| Some(Done { note: Some("Meeting transcript saved") }));
+            finish(&app, claim_pill(&app), done);
+        });
+        return;
+    }
+    let screen = permissions::screen_recording_granted();
+    if !screen || !meeting::model_ready() {
+        if !screen {
+            permissions::request_screen_recording();
+        }
+        show_settings(&app);
+        let _ = app.emit_to(SETTINGS, "show-tab", "meetings");
+        return;
+    }
+    let apps = app.state::<SharedConfig>().read().unwrap().meeting.apps.clone();
+    let _ = item.set_enabled(false);
+    std::thread::spawn(move || {
+        // A meeting that dies part-way (disk full, say) must not leave the tray saying it runs.
+        let (failed_app, failed_item) = (app.clone(), item.clone());
+        let on_failure = move |e: anyhow::Error| {
+            let _ = failed_item.set_text(START_MEETING);
+            finish(&failed_app, claim_pill(&failed_app), Err(e));
+        };
+        let result = meeting::start(apps, on_failure);
+        let _ = item.set_enabled(true);
+        if result.is_ok() {
+            let _ = item.set_text("Stop meeting transcript");
+        }
+        let done = result.map(|_| Some(Done { note: Some("Meeting transcript started") }));
+        finish(&app, claim_pill(&app), done);
+    });
+}
+
+/// Tray "Quit". A running meeting is finished first, so its last half minute of speech is
+/// transcribed and the capture is stopped cleanly.
+fn quit_app(app: &AppHandle) {
+    #[cfg(target_os = "macos")]
+    if meeting::running() {
+        let app = app.clone();
+        std::thread::spawn(move || {
+            if let Err(e) = meeting::stop() {
+                log::warn!("finishing the meeting transcript before quitting: {e:#}");
+            }
+            app.exit(0);
+        });
+        return;
+    }
+    app.exit(0);
+}
+
+/// Tray "Copy last meeting transcript", to paste into another tool.
+#[cfg(target_os = "macos")]
+fn copy_last_meeting() {
+    let Some(path) = meeting::last_transcript() else {
+        log::info!("copy last meeting transcript: there is none yet");
+        return;
+    };
+    let copied = std::fs::read_to_string(&path)
+        .map_err(|e| e.to_string())
+        .and_then(|text| arboard::Clipboard::new().and_then(|mut c| c.set_text(text)).map_err(|e| e.to_string()));
+    match copied {
+        Ok(()) => log::info!("copied meeting transcript {}", path.display()),
+        Err(e) => log::warn!("could not copy meeting transcript {}: {e}", path.display()),
     }
 }
 
@@ -301,6 +386,8 @@ fn init_logging() {
     let mut builder =
         env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"));
     builder.format_timestamp_millis();
+    // The speech library reports timings for every meeting chunk at info; keep only its problems.
+    builder.filter_module("transcribe_cpp", log::LevelFilter::Warn);
     if let Ok(path) = Config::path() {
         let log_path = path.with_file_name("stfu.log");
         let _ = std::fs::create_dir_all(path.parent().unwrap());
@@ -384,6 +471,11 @@ pub fn run() {
             commands::copy_text,
             commands::last_dictation,
             commands::set_clipboard_mode,
+            commands::meeting_status,
+            commands::meeting_download_model,
+            commands::meeting_delete_model,
+            commands::meeting_open_folder,
+            commands::meeting_set_apps,
         ])
         .on_window_event(|window, event| {
             // Closing the settings window hides it so it can be reopened from the tray.
@@ -466,9 +558,15 @@ pub fn run() {
                 .item(&profile_menu)
                 .item(&language_menu)
                 .items(&[&autostart])
-                .separator()
-                .items(&[&update, &quit])
-                .build()?;
+                .separator();
+            #[cfg(target_os = "macos")]
+            let meeting_item = MenuItemBuilder::with_id("meeting", START_MEETING).build(app)?;
+            #[cfg(target_os = "macos")]
+            let menu = menu
+                .item(&meeting_item)
+                .item(&MenuItemBuilder::with_id("meeting-copy", "Copy last meeting transcript").build(app)?)
+                .separator();
+            let menu = menu.items(&[&update, &quit]).build()?;
             let autostart_item = autostart.clone();
             let shared_for_tray = shared.clone();
             let lang_items_for_tray = lang_items.clone();
@@ -477,9 +575,13 @@ pub fn run() {
                 .menu(&menu)
                 .tooltip(format!("stfu {} — hold {} to dictate", env!("CARGO_PKG_VERSION"), config.hotkey.join("+")))
                 .on_menu_event(move |app, event| match event.id.as_ref() {
-                    "quit" => app.exit(0),
+                    "quit" => quit_app(app),
                     "settings" => show_settings(app),
                     "copy-last" => copy_last_dictation(),
+                    #[cfg(target_os = "macos")]
+                    "meeting" => toggle_meeting(app, &meeting_item),
+                    #[cfg(target_os = "macos")]
+                    "meeting-copy" => copy_last_meeting(),
                     "update" => updater::check_now(app.clone()),
                     id if id.starts_with("profile:") => {
                         let name = id.trim_start_matches("profile:").to_string();

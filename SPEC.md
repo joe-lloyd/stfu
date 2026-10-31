@@ -21,7 +21,7 @@ Compiled from wisprflow.ai/features, the What's New changelog through 2026-09-15
 - **P0** — must exist for the app to be usable as a daily replacement
 - **P1** — needed for parity on the things that make Flow feel good
 - **P2** — nice-to-have / later
-- **OUT** — deliberately not building (team, mobile, meeting notetaker)
+- **OUT** — deliberately not building (team, mobile, cloud notetaker)
 
 ### 1.1 Capture & hotkey
 
@@ -113,7 +113,8 @@ Compiled from wisprflow.ai/features, the What's New changelog through 2026-09-15
 | Feature | Priority |
 |---|---|
 | Shared dictionary, shared snippets, org/department word sharing, admin portal, leaderboards, usage dashboards, bulk invites, trials, seats | OUT |
-| Notetaker (meeting recording, summaries, MCP, calendar) | OUT (separate project if ever) |
+| Local meeting transcripts: mic plus the call apps' audio, transcribed on the machine, no audio kept (see README) | P1, macOS 13+ (built) |
+| Notetaker extras (summaries, MCP, calendar, cloud recording) | OUT: transcripts go to other tools for that |
 | iOS / Android keyboards, iPhone Shortcuts, Dynamic Island | OUT |
 | Web demo | OUT |
 
@@ -130,7 +131,7 @@ Compiled from wisprflow.ai/features, the What's New changelog through 2026-09-15
 
 **Non-goals**
 
-- Multi-user, sync, billing, mobile, meeting notes, browser extension.
+- Multi-user, sync, billing, mobile, meeting summaries, browser extension.
 - Pixel-perfect copy of Flow's UI.
 
 ---
@@ -453,7 +454,7 @@ Tooling: pnpm (`--ignore-scripts`), Rust stable, `cargo-deny`, GitHub Actions ma
 - Single provider key per service, no key rotation UI.
 - Depends on OpenCode Zen free models that are promotional and may be withdrawn; paid fallback requires the user to add a key.
 - Settings UI is functional, not designed.
-- Team, sync, mobile, meeting features skipped entirely (see §1.8).
+- Team, sync and mobile skipped entirely; meetings get local transcripts only (see §1.8).
 
 ---
 

@@ -245,6 +245,12 @@ pub fn request_permission(key: String) -> Result<(), String> {
                 p::request_accessibility();
                 open_pane("accessibility")
             }
+            "screen_recording" => {
+                if !p::request_screen_recording() {
+                    open_pane("screen_recording")?;
+                }
+                Ok(())
+            }
             other => Err(format!("unknown permission: {other}")),
         }
     }
@@ -265,6 +271,7 @@ pub fn open_pane(key: &str) -> Result<(), String> {
             "microphone" => "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
             "accessibility" => "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
             "input_monitoring" => "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent",
+            "screen_recording" => "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
             other => return Err(format!("unknown settings pane: {other}")),
         };
         std::process::Command::new("open")
@@ -446,14 +453,17 @@ pub fn history_delete_audio(day: String) -> Result<(), String> {
 /// Opens the history folder in Finder / Explorer / the file manager. Always this one fixed path.
 #[tauri::command]
 pub fn history_open_folder() -> Result<(), String> {
-    let root = history::dir().map_err(|e| format!("{e:#}"))?;
-    std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+    open_folder(&history::dir().map_err(|e| format!("{e:#}"))?)
+}
+
+fn open_folder(root: &std::path::Path) -> Result<(), String> {
+    std::fs::create_dir_all(root).map_err(|e| e.to_string())?;
     #[cfg(target_os = "macos")]
-    let result = std::process::Command::new("open").arg(&root).spawn();
+    let result = std::process::Command::new("open").arg(root).spawn();
     #[cfg(target_os = "windows")]
-    let result = std::process::Command::new("explorer").arg(&root).spawn();
+    let result = std::process::Command::new("explorer").arg(root).spawn();
     #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
-    let result = std::process::Command::new("xdg-open").arg(&root).spawn();
+    let result = std::process::Command::new("xdg-open").arg(root).spawn();
     result.map(|_| ()).map_err(|e| e.to_string())
 }
 
@@ -581,5 +591,122 @@ pub fn set_clipboard_mode(
     cfg.clipboard = mode;
     cfg.save().map_err(|e| format!("{e:#}"))?;
     log::info!("clipboard mode: {mode:?}");
+    Ok(())
+}
+
+#[derive(serde::Serialize)]
+pub struct MeetingApp {
+    id: String,
+    label: String,
+    enabled: bool,
+}
+
+/// Everything the Meetings tab shows. `supported` is false off macOS 13+, and the rest is then
+/// left at its defaults.
+#[derive(serde::Serialize, Default)]
+pub struct MeetingStatus {
+    supported: bool,
+    running: bool,
+    model_name: String,
+    model_mb: u64,
+    model_ready: bool,
+    downloading: bool,
+    screen_recording: bool,
+    folder: String,
+    apps: Vec<MeetingApp>,
+}
+
+#[tauri::command]
+pub fn meeting_status(state: State<'_, SharedConfig>) -> MeetingStatus {
+    #[cfg(target_os = "macos")]
+    {
+        use crate::meeting;
+        let cfg = state.read().unwrap();
+        let mut apps: Vec<MeetingApp> = crate::config::MEETING_APPS
+            .iter()
+            .map(|(id, label)| MeetingApp {
+                id: id.to_string(),
+                label: label.to_string(),
+                enabled: cfg.meeting.apps.iter().any(|a| a == id),
+            })
+            .collect();
+        // Ids added by hand in config.json are shown too, so saving never drops them.
+        for id in &cfg.meeting.apps {
+            if !apps.iter().any(|a| &a.id == id) {
+                apps.push(MeetingApp { id: id.clone(), label: id.clone(), enabled: true });
+            }
+        }
+        MeetingStatus {
+            supported: crate::syscap::supported(),
+            running: meeting::running(),
+            model_name: meeting::MODEL.name.into(),
+            model_mb: meeting::MODEL.bytes / 1_000_000,
+            model_ready: meeting::model_ready(),
+            downloading: meeting::downloading(),
+            screen_recording: crate::permissions::screen_recording_granted(),
+            folder: meeting::dir().map(|p| p.display().to_string()).unwrap_or_default(),
+            apps,
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = state;
+        MeetingStatus::default()
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[derive(serde::Serialize, Clone)]
+struct DownloadProgress {
+    done: u64,
+    total: u64,
+}
+
+/// Downloads and verifies the speech model, reporting progress to Settings as
+/// `meeting-model-progress` about four times a second.
+#[tauri::command]
+pub async fn meeting_download_model(app: tauri::AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let mut last = std::time::Instant::now();
+        crate::meeting::download_model(move |done, total| {
+            if last.elapsed().as_millis() >= 250 || done == total {
+                last = std::time::Instant::now();
+                let _ = app.emit_to(crate::SETTINGS, "meeting-model-progress", DownloadProgress { done, total });
+            }
+        })
+        .await
+        .map_err(|e| format!("{e:#}"))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        Err("meeting transcripts are macOS only for now".into())
+    }
+}
+
+#[tauri::command]
+pub fn meeting_delete_model() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    return crate::meeting::delete_model().map_err(|e| format!("{e:#}"));
+    #[cfg(not(target_os = "macos"))]
+    Err("meeting transcripts are macOS only for now".into())
+}
+
+#[tauri::command]
+pub fn meeting_open_folder() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    return open_folder(&crate::meeting::dir().map_err(|e| format!("{e:#}"))?);
+    #[cfg(not(target_os = "macos"))]
+    Err("meeting transcripts are macOS only for now".into())
+}
+
+/// Saves which apps a meeting transcript hears. Takes effect from the next meeting.
+#[tauri::command]
+pub fn meeting_set_apps(state: State<'_, SharedConfig>, apps: Vec<String>) -> Result<(), String> {
+    let mut cfg = state.write().unwrap();
+    cfg.meeting.apps = apps;
+    cfg.save().map_err(|e| format!("{e:#}"))?;
+    log::info!("meeting apps: {:?}", cfg.meeting.apps);
     Ok(())
 }

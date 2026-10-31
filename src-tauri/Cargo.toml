@@ -33,7 +33,14 @@ core-graphics = "0.25"
 core-foundation = "0.10"
 objc2 = "0.6"
 block2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSString"] }
+objc2-foundation = { version = "0.3", features = ["NSString", "NSArray", "NSError", "NSProcessInfo"] }
+# Call audio for meeting transcripts, per app (see syscap.rs).
+objc2-screen-capture-kit = "0.3"
+objc2-core-media = "0.3"
+objc2-core-audio-types = "0.3"
+# Local speech-to-text for meeting transcripts. CPU only: the small English model is fast enough
+# without a GPU, and Metal hangs model loads on Intel Macs with AMD graphics.
+transcribe-cpp = { version = "0.4.1", default-features = false }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 rdev = "0.5"

@@ -158,7 +158,7 @@ fn check_id(id: &str) -> Result<()> {
 }
 
 /// Dictations can be private, so keep the folder readable by this user only.
-fn create_private_dir(path: &Path) -> Result<()> {
+pub(crate) fn create_private_dir(path: &Path) -> Result<()> {
     std::fs::create_dir_all(path).with_context(|| format!("creating {}", path.display()))?;
     #[cfg(unix)]
     {

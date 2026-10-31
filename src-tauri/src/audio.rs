@@ -77,6 +77,20 @@ fn audio_thread(rx: Receiver<Cmd>) {
 }
 
 fn start_stream(level_tx: Sender<f32>) -> Result<Active> {
+    let samples = Arc::new(Mutex::new(Vec::<f32>::with_capacity(48_000 * 30)));
+    let sink = samples.clone();
+    let mut last_emit = Instant::now();
+    let mut peak = 0f32;
+    let (stream, rate, channels) =
+        open_input(move |data| push(&sink, data, &mut peak, &mut last_emit, &level_tx))?;
+    Ok(Active { _stream: stream, samples, rate, channels })
+}
+
+/// Opens the default microphone and calls `on_data` with its samples as f32, interleaved at the
+/// device's own rate and channel count, which are returned alongside the running stream.
+pub fn open_input(
+    mut on_data: impl FnMut(&[f32]) + Send + 'static,
+) -> Result<(cpal::Stream, u32, u16)> {
     let host = cpal::default_host();
     let device = host
         .default_input_device()
@@ -93,32 +107,23 @@ fn start_stream(level_tx: Sender<f32>) -> Result<Active> {
     );
     let rate = config.sample_rate();
     let channels = config.channels();
-    let samples = Arc::new(Mutex::new(Vec::<f32>::with_capacity(rate as usize * 30)));
-    let sink = samples.clone();
-    let mut last_emit = Instant::now();
-    let mut peak = 0f32;
 
     let err_fn = |e| log::error!("audio stream error: {e}");
     let stream_config: cpal::StreamConfig = config.clone().into();
+    let mut scratch = Vec::<f32>::new();
     let stream = match config.sample_format() {
         cpal::SampleFormat::F32 => device.build_input_stream(
             stream_config.clone(),
-            move |data: &[f32], _| {
-                push(&sink, data.iter().copied(), &mut peak, &mut last_emit, &level_tx)
-            },
+            move |data: &[f32], _| on_data(data),
             err_fn,
             None,
         )?,
         cpal::SampleFormat::I16 => device.build_input_stream(
             stream_config.clone(),
             move |data: &[i16], _| {
-                push(
-                    &sink,
-                    data.iter().map(|s| *s as f32 / i16::MAX as f32),
-                    &mut peak,
-                    &mut last_emit,
-                    &level_tx,
-                )
+                scratch.clear();
+                scratch.extend(data.iter().map(|s| *s as f32 / i16::MAX as f32));
+                on_data(&scratch)
             },
             err_fn,
             None,
@@ -126,13 +131,9 @@ fn start_stream(level_tx: Sender<f32>) -> Result<Active> {
         cpal::SampleFormat::U16 => device.build_input_stream(
             stream_config.clone(),
             move |data: &[u16], _| {
-                push(
-                    &sink,
-                    data.iter().map(|s| (*s as f32 - 32768.0) / 32768.0),
-                    &mut peak,
-                    &mut last_emit,
-                    &level_tx,
-                )
+                scratch.clear();
+                scratch.extend(data.iter().map(|s| (*s as f32 - 32768.0) / 32768.0));
+                on_data(&scratch)
             },
             err_fn,
             None,
@@ -140,18 +141,18 @@ fn start_stream(level_tx: Sender<f32>) -> Result<Active> {
         other => return Err(anyhow!("unsupported sample format {other:?}")),
     };
     stream.play().context("starting input stream")?;
-    Ok(Active { _stream: stream, samples, rate, channels })
+    Ok((stream, rate, channels))
 }
 
 fn push(
     sink: &Arc<Mutex<Vec<f32>>>,
-    data: impl Iterator<Item = f32>,
+    data: &[f32],
     peak: &mut f32,
     last_emit: &mut Instant,
     level_tx: &Sender<f32>,
 ) {
     let mut buf = sink.lock().unwrap();
-    for s in data {
+    for &s in data {
         *peak = peak.max(s.abs());
         buf.push(s);
     }
@@ -179,29 +180,33 @@ pub fn silent_wav(seconds: f32) -> Result<Vec<u8>> {
     encode_wav(&samples, TARGET_RATE, 1)
 }
 
-/// Downmixes to mono, resamples to 16 kHz (linear), trims edge silence, writes 16-bit PCM WAV.
-fn encode_wav(samples: &[f32], rate: u32, channels: u16) -> Result<Vec<u8>> {
+/// Downmixes interleaved samples to mono and resamples them to 16 kHz (linear).
+pub fn to_mono_16k(samples: &[f32], rate: u32, channels: u16) -> Vec<f32> {
     let ch = channels.max(1) as usize;
     let mono: Vec<f32> = samples
         .chunks(ch)
         .map(|frame| frame.iter().sum::<f32>() / ch as f32)
         .collect();
-    let resampled = if rate == TARGET_RATE {
-        mono
-    } else {
-        let ratio = rate as f64 / TARGET_RATE as f64;
-        let out_len = (mono.len() as f64 / ratio) as usize;
-        (0..out_len)
-            .map(|i| {
-                let pos = i as f64 * ratio;
-                let idx = pos as usize;
-                let frac = (pos - idx as f64) as f32;
-                let a = mono.get(idx).copied().unwrap_or(0.0);
-                let b = mono.get(idx + 1).copied().unwrap_or(a);
-                a + (b - a) * frac
-            })
-            .collect()
-    };
+    if rate == TARGET_RATE {
+        return mono;
+    }
+    let ratio = rate as f64 / TARGET_RATE as f64;
+    let out_len = (mono.len() as f64 / ratio) as usize;
+    (0..out_len)
+        .map(|i| {
+            let pos = i as f64 * ratio;
+            let idx = pos as usize;
+            let frac = (pos - idx as f64) as f32;
+            let a = mono.get(idx).copied().unwrap_or(0.0);
+            let b = mono.get(idx + 1).copied().unwrap_or(a);
+            a + (b - a) * frac
+        })
+        .collect()
+}
+
+/// Downmixes to mono, resamples to 16 kHz (linear), writes 16-bit PCM WAV.
+fn encode_wav(samples: &[f32], rate: u32, channels: u16) -> Result<Vec<u8>> {
+    let resampled = to_mono_16k(samples, rate, channels);
     // Too short, or nothing but silence (also what macOS delivers when the mic is not allowed):
     // return an empty WAV so the caller can skip quietly instead of showing an error.
     let peak = resampled.iter().fold(0f32, |m, s| m.max(s.abs()));
