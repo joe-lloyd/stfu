@@ -86,6 +86,45 @@ pub struct Config {
     /// Whether a dictation stays on the clipboard after it is pasted.
     #[serde(default)]
     pub clipboard: ClipboardMode,
+    /// Meeting transcripts (see meeting.rs).
+    #[serde(default)]
+    pub meeting: MeetingConfig,
+}
+
+/// Apps whose sound a meeting transcript hears, by bundle id: call apps and browsers. Anything
+/// else, music players included, is never captured.
+pub const MEETING_APPS: &[(&str, &str)] = &[
+    ("us.zoom.xos", "Zoom"),
+    ("com.microsoft.teams2", "Microsoft Teams"),
+    ("com.microsoft.teams", "Microsoft Teams (classic)"),
+    ("com.tinyspeck.slackmacgap", "Slack"),
+    ("com.apple.FaceTime", "FaceTime"),
+    ("Cisco-Systems.Spark", "Webex"),
+    ("com.cisco.webexmeetingsapp", "Webex Meetings"),
+    ("com.hnc.Discord", "Discord"),
+    ("com.google.Chrome", "Google Chrome"),
+    ("com.apple.Safari", "Safari"),
+    ("company.thebrowser.Browser", "Arc"),
+    ("com.microsoft.edgemac", "Microsoft Edge"),
+    ("org.mozilla.firefox", "Firefox"),
+    ("com.brave.Browser", "Brave"),
+];
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MeetingConfig {
+    /// Bundle ids of the apps to hear (see `MEETING_APPS`).
+    #[serde(default = "default_meeting_apps")]
+    pub apps: Vec<String>,
+}
+
+impl Default for MeetingConfig {
+    fn default() -> Self {
+        Self { apps: default_meeting_apps() }
+    }
+}
+
+fn default_meeting_apps() -> Vec<String> {
+    MEETING_APPS.iter().map(|(id, _)| id.to_string()).collect()
 }
 
 /// Pasting goes through the clipboard and then puts back what was there before. This decides
@@ -237,6 +276,7 @@ impl Default for Config {
             auto_update: true,
             history: HistoryConfig::default(),
             clipboard: ClipboardMode::default(),
+            meeting: MeetingConfig::default(),
         }
     }
 }

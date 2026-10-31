@@ -31,6 +31,23 @@ pub fn request_input_monitoring() -> bool {
     unsafe { IOHIDRequestAccess(LISTEN_EVENT) }
 }
 
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    fn CGPreflightScreenCaptureAccess() -> bool;
+    fn CGRequestScreenCaptureAccess() -> bool;
+}
+
+/// Screen Recording, which macOS requires for hearing other apps' audio (meeting transcripts).
+/// Like Input Monitoring, a new grant only applies once the app has been restarted.
+pub fn screen_recording_granted() -> bool {
+    unsafe { CGPreflightScreenCaptureAccess() }
+}
+
+/// Shows the system's Screen Recording prompt, the first time only.
+pub fn request_screen_recording() -> bool {
+    unsafe { CGRequestScreenCaptureAccess() }
+}
+
 /// Microphone, without re-prompting.
 pub fn microphone_granted() -> bool {
     let media = NSString::from_str("soun");
