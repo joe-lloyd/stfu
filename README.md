@@ -45,13 +45,15 @@ Secrets that make this work live in the GitHub repo (`APPLE_CERTIFICATE`, `APPLE
 
 ## Releasing
 
-Push a tag and GitHub Actions builds macOS (universal), Windows (x64) and Linux (x64) and publishes a release with the install commands in its notes:
+`main` only accepts pull requests. To release, run this from a clean, up-to-date `main`:
 
 ```sh
-git tag v0.2.0 && git push origin v0.2.0
+scripts/release.sh 0.10.0
 ```
 
-`check.yml` type-checks all three platforms on every push to `main`. Both workflows run on GitHub-hosted runners; change `runs-on` to a self-hosted label to move a job onto a lab machine.
+It bumps the version in `package.json`, `tauri.conf.json`, `Cargo.toml` and `Cargo.lock` on a `release/v0.10.0` branch, opens and merges a `release: v0.10.0` pull request, then tags the merged commit and pushes the tag. It needs an authenticated `gh`. The tag starts `release.yml`, which builds macOS (universal), Windows (x64) and Linux (x64) and publishes a release with the install commands in its notes.
+
+`check.yml` type-checks all three platforms on every pull request and every push to `main`. Both workflows run on GitHub-hosted runners; change `runs-on` to a self-hosted label to move a job onto a lab machine.
 
 ## Build from source
 
