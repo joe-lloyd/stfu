@@ -220,13 +220,22 @@ pub fn start(apps: Vec<String>, on_failure: impl FnOnce(anyhow::Error) + Send + 
     std::thread::Builder::new()
         .name("meeting".into())
         .spawn(move || {
-            let _active = active;
             let mut ready = Some(ready_tx);
-            if let Err(e) = run(&model, apps, &thread_path, started, ctl_rx, &mut ready) {
-                log::error!("meeting transcript: {e:#}");
-                match ready {
-                    Some(ready) => drop(ready.send(Err(e))),
-                    None => on_failure(e),
+            match run(&model, apps, &thread_path, started, ctl_rx, &mut ready) {
+                Ok(reply) => {
+                    // Over before `stop` hears back, so it can start the next one straight away.
+                    drop(active);
+                    if let Some(reply) = reply {
+                        let _ = reply.send(Ok(thread_path));
+                    }
+                }
+                Err(e) => {
+                    drop(active);
+                    log::error!("meeting transcript: {e:#}");
+                    match ready {
+                        Some(ready) => drop(ready.send(Err(e))),
+                        None => on_failure(e),
+                    }
                 }
             }
         })
@@ -259,7 +268,7 @@ fn run(
     started: chrono::DateTime<chrono::Local>,
     ctl: mpsc::Receiver<Ctl>,
     ready: &mut Option<mpsc::Sender<Result<()>>>,
-) -> Result<()> {
+) -> Result<Option<mpsc::Sender<Result<PathBuf>>>> {
     transcribe_cpp::init_logging();
     let model = transcribe_cpp::Model::load(model_path).context("loading the speech model")?;
     let mut session = new_session(&model)?;
@@ -301,10 +310,7 @@ fn run(
         if let Some(reply) = reply {
             out.finish()?;
             log::info!("meeting transcript finished: {}", path.display());
-            if let Some(reply) = reply {
-                let _ = reply.send(Ok(path.to_path_buf()));
-            }
-            return Ok(());
+            return Ok(reply);
         }
     }
 }
