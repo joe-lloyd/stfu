@@ -187,6 +187,29 @@ Open **Settings > History** to browse by day, search, play the audio, copy the o
 
 The history never leaves the machine. The folder and files are readable by your user only (0700/0600 on macOS and Linux). Because the files are plain JSON Lines they also work with other tools, e.g. `jq -r .output.text ~/Library/Application\ Support/stfu/history/*.jsonl`.
 
+## Meeting transcripts
+
+macOS 13 or newer. Choose **Start meeting transcript** in the menu bar when a call begins and **Stop meeting transcript** when it ends. stfu transcribes both sides of the call on this machine and writes them to a plain text file, ready to paste into another tool:
+
+```
+~/Library/Application Support/stfu/meetings/2026-10-31_14-05-33.txt
+```
+
+```
+[00:12:30] You: I can take the migration plan, I'll have it by Friday.
+[00:12:41] Others: Great, then Sarah does the payment crash.
+```
+
+- **Local only.** A small English model, NVIDIA Parakeet TDT-CTC 110M (135 MB), runs on the CPU through [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp). Download it once from Settings > Meetings; the download is checked against its SHA-256 before it is used. Nothing is uploaded and no API key is needed.
+- **No audio is kept.** Audio is held in memory for about 30 seconds, transcribed, and dropped. Each chunk's text is appended as soon as it is ready, so a crash loses at most the chunk in progress.
+- **Only call apps are heard.** "You" is the microphone. "Others" comes from ScreenCaptureKit, filtered to the apps ticked in Settings > Meetings: Zoom, Teams, Slack, FaceTime, Webex, Discord and the common browsers. Spotify, Music and anything else are never captured. A browser is heard as a whole, so a YouTube tab in the same browser as a Google Meet call is heard too; pause it, or take calls in another browser and untick this one.
+- **Screen Recording permission.** macOS requires it to hear other apps, although nothing is recorded from the screen. Settings > Meetings has a button for it. A new grant only applies after a restart, which macOS offers as Quit & Reopen.
+- **Wear headphones.** On speakers the microphone hears the call, and your music, again.
+- **Nobody else is notified.** Unlike Zoom's or Teams' own recording, the other people see nothing. Tell them, and check whether their jurisdiction requires consent.
+- **Speed.** Chunks end at the quietest moment of their last six seconds, so words are rarely cut in two. Transcription uses half the CPU cores. Intel Macs run about 3.7x faster than real time, because transcribe.cpp builds without AVX2 there so the app runs on every Intel Mac; Apple silicon is faster.
+
+**Copy last meeting transcript** in the menu bar puts the newest one on the clipboard. Windows and Linux are not supported yet: both need their own per-app audio capture.
+
 ## Behaviour details
 
 - Taps shorter than 300 ms are ignored.
