@@ -17,9 +17,10 @@ interface MeetingStatus {
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
-// The app list as last saved from this tab, so the main Save carries it instead of an old copy.
-let savedApps: string[] | null = null;
 let permTimer: number | undefined;
+// App-list saves run one after another, each reading the checkboxes when its turn comes, so the
+// last one to land is always the latest selection.
+let saving: Promise<void> = Promise.resolve();
 
 function status(id: string, text: string, kind: "" | "ok" | "err" = "") {
   const el = $(id);
@@ -27,9 +28,16 @@ function status(id: string, text: string, kind: "" | "ok" | "err" = "") {
   el.className = `status ${kind}`;
 }
 
-/** The meeting options to save with the rest of the config. */
+/** The meeting options to save with the rest of the config: the ticked apps once this tab has
+ * shown them, otherwise the config as loaded. */
 export function meetingOptions(current: MeetingConfig | undefined): MeetingConfig | undefined {
-  return savedApps ? { apps: savedApps } : current;
+  return $("mt-apps").childElementCount ? { apps: tickedApps() } : current;
+}
+
+function tickedApps(): string[] {
+  return Array.from($("mt-apps").querySelectorAll<HTMLInputElement>("input[data-id]"))
+    .filter((b) => b.checked)
+    .map((b) => b.dataset.id!);
 }
 
 export async function showMeetings() {
@@ -46,23 +54,29 @@ export async function showMeetings() {
   $("mt-delete").hidden = !s.model_ready;
   $<HTMLButtonElement>("mt-delete").disabled = s.running;
 
-  const perm = $("mt-perm");
-  perm.classList.toggle("ok", s.screen_recording);
-  $("mt-perm-why").textContent = s.screen_recording
-    ? "Granted"
-    : "Lets stfu hear the call apps below. Nothing is recorded from the screen.";
-
-  renderApps(s.apps);
+  // Rendered once: re-rendering on a later refresh could undo a tick whose save is still queued.
+  if (!$("mt-apps").childElementCount) renderApps(s.apps);
   $("mt-folder").textContent = s.folder;
+  renderPermission(s.screen_recording);
 
-  // Keep the permission row honest while the user is away in System Settings.
+  // Keep the permission row honest while the user is away in System Settings. Only that row is
+  // refreshed, so a poll can never undo a checkbox the user has just changed.
   if (permTimer) clearInterval(permTimer);
   if (!s.screen_recording) {
-    permTimer = window.setInterval(() => {
-      if ($("tab-meetings").hidden) clearInterval(permTimer);
-      else void showMeetings();
+    permTimer = window.setInterval(async () => {
+      if ($("tab-meetings").hidden) return clearInterval(permTimer);
+      const granted = (await invoke<MeetingStatus>("meeting_status")).screen_recording;
+      renderPermission(granted);
+      if (granted) clearInterval(permTimer);
     }, 2500);
   }
+}
+
+function renderPermission(granted: boolean) {
+  $("mt-perm").classList.toggle("ok", granted);
+  $("mt-perm-why").textContent = granted
+    ? "Granted"
+    : "Lets stfu hear the call apps below. Nothing is recorded from the screen.";
 }
 
 function renderApps(apps: MeetingApp[]) {
@@ -75,7 +89,9 @@ function renderApps(apps: MeetingApp[]) {
       box.type = "checkbox";
       box.checked = a.enabled;
       box.dataset.id = a.id;
-      box.addEventListener("change", () => void saveApps());
+      box.addEventListener("change", () => {
+        saving = saving.then(saveApps);
+      });
       label.append(box, a.label);
       return label;
     }),
@@ -83,12 +99,8 @@ function renderApps(apps: MeetingApp[]) {
 }
 
 async function saveApps() {
-  const apps = Array.from($("mt-apps").querySelectorAll<HTMLInputElement>("input[data-id]"))
-    .filter((b) => b.checked)
-    .map((b) => b.dataset.id!);
   try {
-    await invoke("meeting_set_apps", { apps });
-    savedApps = apps;
+    await invoke("meeting_set_apps", { apps: tickedApps() });
     status("mt-apps-status", "Saved. Applies from the next meeting.", "ok");
   } catch (e) {
     status("mt-apps-status", String(e), "err");

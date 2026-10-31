@@ -83,16 +83,27 @@ pub async fn download_model(mut progress: impl FnMut(u64, u64)) -> Result<()> {
     if DOWNLOADING.swap(true, Ordering::SeqCst) {
         bail!("the model is already downloading");
     }
-    let result = download(&mut progress).await;
-    DOWNLOADING.store(false, Ordering::SeqCst);
-    result
+    // Cleared however the download ends, including when its future is dropped.
+    struct Done;
+    impl Drop for Done {
+        fn drop(&mut self) {
+            DOWNLOADING.store(false, Ordering::SeqCst);
+        }
+    }
+    let _done = Done;
+    download(&mut progress).await
 }
 
 async fn download(progress: &mut impl FnMut(u64, u64)) -> Result<()> {
     let dir = models_dir()?;
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
     let part = dir.join(format!("{}.part", MODEL.file));
-    let mut resp = reqwest::Client::new()
+    // No overall timeout, since a slow line may need minutes, but a stalled one fails.
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(15))
+        .read_timeout(Duration::from_secs(30))
+        .build()?;
+    let mut resp = client
         .get(MODEL.url)
         .send()
         .await
@@ -166,19 +177,29 @@ enum Ctl {
     Stop(mpsc::Sender<Result<PathBuf>>),
 }
 
+/// True from the moment a meeting starts until its thread has ended, however it ends.
+static ACTIVE: AtomicBool = AtomicBool::new(false);
+/// How to reach the running meeting. Only ever locked briefly.
 static MEETING: Mutex<Option<mpsc::Sender<Ctl>>> = Mutex::new(None);
 
 pub fn running() -> bool {
-    MEETING.lock().unwrap().is_some()
+    ACTIVE.load(Ordering::SeqCst)
+}
+
+/// Marks the meeting as over when dropped, so an error or a panic in the meeting thread can never
+/// leave the app showing a meeting that is not being transcribed.
+struct Active;
+
+impl Drop for Active {
+    fn drop(&mut self) {
+        MEETING.lock().unwrap().take();
+        ACTIVE.store(false, Ordering::SeqCst);
+    }
 }
 
 /// Starts transcribing. Returns once the model is loaded and both sides are being captured, with
-/// the path of the transcript file.
-pub fn start(apps: Vec<String>) -> Result<PathBuf> {
-    let mut slot = MEETING.lock().unwrap();
-    if slot.is_some() {
-        bail!("a meeting transcript is already running");
-    }
+/// the path of the transcript file. If the meeting fails after that, `on_failure` gets the error.
+pub fn start(apps: Vec<String>, on_failure: impl FnOnce(anyhow::Error) + Send + 'static) -> Result<PathBuf> {
     if !syscap::supported() {
         bail!("meeting transcripts need macOS 13 or newer");
     }
@@ -186,29 +207,38 @@ pub fn start(apps: Vec<String>) -> Result<PathBuf> {
     if !model.exists() {
         bail!("download the speech model in Settings first");
     }
+    if ACTIVE.swap(true, Ordering::SeqCst) {
+        bail!("a meeting transcript is already running");
+    }
+    let active = Active;
     let started = chrono::Local::now();
     let path = dir()?.join(format!("{}.txt", started.format("%Y-%m-%d_%H-%M-%S")));
     let (ctl_tx, ctl_rx) = mpsc::channel();
     let (ready_tx, ready_rx) = mpsc::channel();
+    *MEETING.lock().unwrap() = Some(ctl_tx);
     let thread_path = path.clone();
     std::thread::Builder::new()
         .name("meeting".into())
         .spawn(move || {
-            if let Err(e) = run(&model, apps, &thread_path, started, ctl_rx, &ready_tx) {
+            let _active = active;
+            let mut ready = Some(ready_tx);
+            if let Err(e) = run(&model, apps, &thread_path, started, ctl_rx, &mut ready) {
                 log::error!("meeting transcript: {e:#}");
-                let _ = ready_tx.send(Err(e));
+                match ready {
+                    Some(ready) => drop(ready.send(Err(e))),
+                    None => on_failure(e),
+                }
             }
         })
         .context("spawning the meeting thread")?;
     ready_rx.recv().map_err(|_| anyhow!("the meeting recorder stopped unexpectedly"))??;
-    *slot = Some(ctl_tx);
     log::info!("meeting transcript started: {}", path.display());
     Ok(path)
 }
 
 /// Stops capturing, transcribes what is left, and returns the finished transcript's path.
 pub fn stop() -> Result<PathBuf> {
-    let ctl = MEETING.lock().unwrap().take().ok_or_else(|| anyhow!("no meeting transcript is running"))?;
+    let ctl = MEETING.lock().unwrap().clone().ok_or_else(|| anyhow!("no meeting transcript is running"))?;
     let (tx, rx) = mpsc::channel();
     ctl.send(Ctl::Stop(tx)).map_err(|_| anyhow!("the meeting recorder stopped unexpectedly"))?;
     rx.recv().map_err(|_| anyhow!("the meeting recorder stopped unexpectedly"))?
@@ -228,7 +258,7 @@ fn run(
     path: &Path,
     started: chrono::DateTime<chrono::Local>,
     ctl: mpsc::Receiver<Ctl>,
-    ready: &mpsc::Sender<Result<()>>,
+    ready: &mut Option<mpsc::Sender<Result<()>>>,
 ) -> Result<()> {
     transcribe_cpp::init_logging();
     let model = transcribe_cpp::Model::load(model_path).context("loading the speech model")?;
@@ -244,7 +274,9 @@ fn run(
     let call = syscap::AppAudio::start(apps, others.clone())?;
     let mut mic = Some(mic);
     let mut call = Some(call);
-    let _ = ready.send(Ok(()));
+    if let Some(ready) = ready.take() {
+        let _ = ready.send(Ok(()));
+    }
 
     let mut you = Track { label: "You", pending: Vec::new(), consumed: 0 };
     let mut them = Track { label: "Others", pending: Vec::new(), consumed: 0 };
@@ -493,7 +525,7 @@ mod tests {
     fn live_meeting() {
         let apps = std::env::var("STFU_MEETING_APPS").expect("set STFU_MEETING_APPS");
         let seconds: u64 = std::env::var("STFU_MEETING_SECONDS").map_or(45, |s| s.parse().unwrap());
-        let path = start(apps.split(',').map(String::from).collect()).unwrap();
+        let path = start(apps.split(',').map(String::from).collect(), |e| panic!("{e:#}")).unwrap();
         assert!(running());
         std::thread::sleep(Duration::from_secs(seconds));
         assert_eq!(stop().unwrap(), path);

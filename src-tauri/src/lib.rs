@@ -110,7 +110,13 @@ fn toggle_meeting(app: &AppHandle, item: &tauri::menu::MenuItem<tauri::Wry>) {
     let apps = app.state::<SharedConfig>().read().unwrap().meeting.apps.clone();
     let _ = item.set_enabled(false);
     std::thread::spawn(move || {
-        let result = meeting::start(apps);
+        // A meeting that dies part-way (disk full, say) must not leave the tray saying it runs.
+        let (failed_app, failed_item) = (app.clone(), item.clone());
+        let on_failure = move |e: anyhow::Error| {
+            let _ = failed_item.set_text(START_MEETING);
+            finish(&failed_app, claim_pill(&failed_app), Err(e));
+        };
+        let result = meeting::start(apps, on_failure);
         let _ = item.set_enabled(true);
         if result.is_ok() {
             let _ = item.set_text("Stop meeting transcript");
@@ -118,6 +124,23 @@ fn toggle_meeting(app: &AppHandle, item: &tauri::menu::MenuItem<tauri::Wry>) {
         let done = result.map(|_| Some(Done { note: Some("Meeting transcript started") }));
         finish(&app, claim_pill(&app), done);
     });
+}
+
+/// Tray "Quit". A running meeting is finished first, so its last half minute of speech is
+/// transcribed and the capture is stopped cleanly.
+fn quit_app(app: &AppHandle) {
+    #[cfg(target_os = "macos")]
+    if meeting::running() {
+        let app = app.clone();
+        std::thread::spawn(move || {
+            if let Err(e) = meeting::stop() {
+                log::warn!("finishing the meeting transcript before quitting: {e:#}");
+            }
+            app.exit(0);
+        });
+        return;
+    }
+    app.exit(0);
 }
 
 /// Tray "Copy last meeting transcript", to paste into another tool.
@@ -552,7 +575,7 @@ pub fn run() {
                 .menu(&menu)
                 .tooltip(format!("stfu {} — hold {} to dictate", env!("CARGO_PKG_VERSION"), config.hotkey.join("+")))
                 .on_menu_event(move |app, event| match event.id.as_ref() {
-                    "quit" => app.exit(0),
+                    "quit" => quit_app(app),
                     "settings" => show_settings(app),
                     "copy-last" => copy_last_dictation(),
                     #[cfg(target_os = "macos")]
