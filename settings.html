@@ -80,6 +80,7 @@
       .last-text.muted { color: #7f7f8a; font-style: italic; }
       .compress { display: flex; gap: 10px; align-items: center; margin-top: 10px; font-size: 12px; color: #b9b9c4; }
       .compress span { flex: 1; }
+      .apps { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 16px; margin-top: 10px; }
     </style>
   </head>
   <body>
@@ -90,7 +91,55 @@
       <nav class="tabs">
         <button id="tab-btn-setup" class="active">Settings</button>
         <button id="tab-btn-history">History</button>
+        <button id="tab-btn-meetings">Meetings</button>
       </nav>
+
+      <div id="tab-meetings" hidden>
+        <section id="mt-unsupported" hidden>
+          <h2>Meeting transcripts</h2>
+          <div class="hint">Meeting transcripts need macOS 13 or newer. Windows and Linux are not supported yet.</div>
+        </section>
+        <div id="mt-body">
+          <section>
+            <h2>Meeting transcripts</h2>
+            <div class="hint">Choose <b>Start meeting transcript</b> in the menu bar when a call begins, and stop it the same way. Your microphone ("You") and the call ("Others") are transcribed on this machine every 30 seconds or so into a plain text file, ready to hand to another tool. No audio is kept and nothing is uploaded. The other people are not told, so let them know.</div>
+          </section>
+          <section>
+            <h2>1. Speech model</h2>
+            <div class="row">
+              <span id="mt-model" style="flex:1"></span>
+              <button class="primary" id="mt-download">Download</button>
+              <button id="mt-delete">Delete</button>
+            </div>
+            <div class="meter" id="mt-meter" hidden><div></div></div>
+            <div class="status" id="mt-model-status"></div>
+          </section>
+          <section>
+            <h2>2. Permission</h2>
+            <div class="perm" id="mt-perm">
+              <span class="dot"></span>
+              <span class="name">Screen Recording</span>
+              <span class="why" id="mt-perm-why"></span>
+              <button id="mt-grant">Grant</button>
+            </div>
+            <div class="hint">macOS calls hearing other apps "Screen Recording". After switching it on, choose Quit &amp; Reopen when macOS asks; it only applies to a freshly started app.</div>
+          </section>
+          <section>
+            <h2>3. Apps to listen to</h2>
+            <div class="hint">Only these apps are heard, so music from Spotify or any other player never ends up in a transcript. A browser is heard as a whole: pause YouTube in the same browser during a call, or take calls in a different browser and untick this one.</div>
+            <div class="apps" id="mt-apps"></div>
+            <div class="status" id="mt-apps-status"></div>
+          </section>
+          <section>
+            <h2>Transcripts</h2>
+            <div class="row">
+              <code id="mt-folder" style="flex:1; user-select:text"></code>
+              <button id="mt-folder-open">Open folder</button>
+            </div>
+            <div class="hint">The menu bar's <b>Copy last meeting transcript</b> puts the newest one on the clipboard. Wear headphones: on speakers the microphone hears the call, and your music, too.</div>
+          </section>
+        </div>
+      </div>
 
       <div id="tab-history" hidden>
         <section>
