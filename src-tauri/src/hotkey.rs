@@ -97,6 +97,14 @@ pub fn validate(names: &[String]) -> Result<()> {
             "Shift on its own would start dictating on every capital letter; add another key"
         ));
     }
+    // A lone Option/AltGr types characters on many layouts (@, {, [), and a lone Command,
+    // Control or Win is held for every shortcut. Fn is the one modifier that is fine alone.
+    if names.len() == 1 && canonical(&names[0]) != "Function" {
+        return Err(anyhow!(
+            "{} on its own is held while typing and for shortcuts; add another key",
+            label(names)
+        ));
+    }
     Ok(())
 }
 
@@ -104,6 +112,48 @@ pub fn validate(names: &[String]) -> Result<()> {
 pub enum HotkeyEvent {
     Down,
     Up,
+    /// Another key was pressed while the hotkey was held (Fn+Shift+Arrow selects text on a
+    /// laptop): drop the take instead of dictating over the selection.
+    Cancel,
+}
+
+/// Where the listener is with the hotkey. A cancelled take stays cancelled until the keys are
+/// let go, so it does not restart while they are still held.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Hold {
+    Idle,
+    Active,
+    Cancelled,
+}
+
+impl Hold {
+    /// The hotkey's keys are (all_held) or are not all down.
+    fn keys(&mut self, all_held: bool) -> Option<HotkeyEvent> {
+        match (*self, all_held) {
+            (Hold::Idle, true) => {
+                *self = Hold::Active;
+                Some(HotkeyEvent::Down)
+            }
+            (Hold::Active, false) => {
+                *self = Hold::Idle;
+                Some(HotkeyEvent::Up)
+            }
+            (Hold::Cancelled, false) => {
+                *self = Hold::Idle;
+                None
+            }
+            _ => None,
+        }
+    }
+
+    /// A key that is not part of any hotkey went down.
+    fn other_key(&mut self) -> Option<HotkeyEvent> {
+        if *self == Hold::Active {
+            *self = Hold::Cancelled;
+            return Some(HotkeyEvent::Cancel);
+        }
+        None
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -153,17 +203,17 @@ mod imp {
                 use std::sync::atomic::{AtomicBool, Ordering};
                 use std::sync::Arc;
 
-                let active = Arc::new(Mutex::new(false));
+                let hold = Arc::new(Mutex::new(Hold::Idle));
                 let needs_reenable = Arc::new(AtomicBool::new(false));
                 let reenable_flag = needs_reenable.clone();
 
-                // Only modifier-flag changes matter for a modifier hotkey. Key up/down events
-                // can carry flags without the Fn bit and would read as a false release.
+                // Modifier-flag changes press and release the hotkey. Key-down events only cancel
+                // a held take: their flags can lack the Fn bit and would read as a false release.
                 let tap = CGEventTap::new(
                     CGEventTapLocation::HID,
                     CGEventTapPlacement::HeadInsertEventTap,
                     CGEventTapOptions::ListenOnly,
-                    vec![CGEventType::FlagsChanged],
+                    vec![CGEventType::FlagsChanged, CGEventType::KeyDown],
                     move |_proxy, etype, event| {
                         match etype {
                             CGEventType::TapDisabledByTimeout | CGEventType::TapDisabledByUserInput => {
@@ -172,6 +222,13 @@ mod imp {
                                 return CallbackResult::Keep;
                             }
                             _ => {}
+                        }
+                        if matches!(etype, CGEventType::KeyDown) {
+                            if let Some(ev) = hold.lock().unwrap().other_key() {
+                                log::info!("key pressed while the hotkey was held; take dropped");
+                                let _ = tx.send(ev);
+                            }
+                            return CallbackResult::Keep;
                         }
                         let flags = event.get_flags();
                         let required =
@@ -185,13 +242,8 @@ mod imp {
                             ),
                             flags.bits()
                         );
-                        let mut active = active.lock().unwrap();
-                        if all_held && !*active {
-                            *active = true;
-                            let _ = tx.send(HotkeyEvent::Down);
-                        } else if !all_held && *active {
-                            *active = false;
-                            let _ = tx.send(HotkeyEvent::Up);
+                        if let Some(ev) = hold.lock().unwrap().keys(all_held) {
+                            let _ = tx.send(ev);
                         }
                         CallbackResult::Keep
                     },
@@ -249,6 +301,15 @@ mod imp {
         *COMBO.lock().unwrap() = combo;
     }
 
+    fn is_modifier(k: Key) -> bool {
+        use rdev::Key::*;
+        matches!(
+            k,
+            ControlLeft | ControlRight | ShiftLeft | ShiftRight | Alt | AltGr | MetaLeft | MetaRight
+                | Function | CapsLock
+        )
+    }
+
     pub fn parse_key(name: &str) -> Result<Key> {
         use rdev::Key::*;
         Ok(match name {
@@ -272,27 +333,36 @@ mod imp {
             .name("hotkey".into())
             .spawn(move || {
                 let mut held: HashSet<Key> = HashSet::new();
-                let mut active = false;
+                let mut hold = Hold::Idle;
                 let callback = move |event: Event| {
-                    match event.event_type {
+                    let pressed = match event.event_type {
                         EventType::KeyPress(k) => {
                             held.insert(k);
+                            Some(k)
                         }
                         EventType::KeyRelease(k) => {
                             held.remove(&k);
+                            None
                         }
                         _ => return,
-                    }
-                    let all_held = {
-                        let combo = COMBO.lock().unwrap();
-                        !combo.is_empty() && combo.iter().all(|k| held.contains(k))
                     };
-                    if all_held && !active {
-                        active = true;
-                        let _ = tx.send(HotkeyEvent::Down);
-                    } else if !all_held && active {
-                        active = false;
-                        let _ = tx.send(HotkeyEvent::Up);
+                    let (all_held, in_combo) = {
+                        let combo = COMBO.lock().unwrap();
+                        let all = !combo.is_empty() && combo.iter().all(|k| held.contains(k));
+                        (all, pressed.is_some_and(|k| combo.contains(&k)))
+                    };
+                    // Any other non-modifier key while the hotkey is held drops the take.
+                    if let Some(k) = pressed {
+                        if !in_combo && !is_modifier(k) {
+                            if let Some(ev) = hold.other_key() {
+                                log::info!("key pressed while the hotkey was held; take dropped");
+                                let _ = tx.send(ev);
+                            }
+                            return;
+                        }
+                    }
+                    if let Some(ev) = hold.keys(all_held) {
+                        let _ = tx.send(ev);
                     }
                 };
                 if let Err(e) = rdev::listen(callback) {
@@ -314,6 +384,27 @@ mod tests {
         for c in CHOICES {
             parse_key(c.name).unwrap_or_else(|e| panic!("{}: {e}", c.name));
         }
+    }
+
+    #[test]
+    fn a_lone_modifier_other_than_fn_is_refused() {
+        for c in CHOICES {
+            let one = [c.name.to_string()];
+            assert_eq!(validate(&one).is_ok(), c.name == "Function", "{} alone", c.name);
+        }
+    }
+
+    #[test]
+    fn another_key_cancels_a_held_take_until_the_keys_are_let_go() {
+        let mut h = Hold::Idle;
+        assert_eq!(h.keys(true), Some(HotkeyEvent::Down));
+        assert_eq!(h.other_key(), Some(HotkeyEvent::Cancel), "Fn+Shift+Left");
+        assert_eq!(h.other_key(), None);
+        assert_eq!(h.keys(true), None, "still held: no new take");
+        assert_eq!(h.keys(false), None, "let go: nothing to stop");
+        assert_eq!(h.keys(true), Some(HotkeyEvent::Down), "next press works");
+        assert_eq!(h.keys(false), Some(HotkeyEvent::Up));
+        assert_eq!(Hold::Idle.other_key(), None, "typing without the hotkey does nothing");
     }
 
     #[test]

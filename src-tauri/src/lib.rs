@@ -802,6 +802,19 @@ fn pipeline_loop(
                     Err(e) => log::error!("start recording: {e:#}"),
                 }
             }
+            HotkeyEvent::Cancel => {
+                if !recording {
+                    continue;
+                }
+                recording = false;
+                holding.store(false, Ordering::SeqCst);
+                let _ = recorder.stop();
+                take = history::new_record();
+                if PILL_OWNER.load(Ordering::SeqCst) == take_no {
+                    let _ = app.emit_to(PILL, "recording-ended", ());
+                }
+                release_pill(&app, take_no);
+            }
             HotkeyEvent::Up => {
                 log::info!("hotkey up");
                 if !recording {

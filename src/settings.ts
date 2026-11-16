@@ -331,10 +331,12 @@ async function load() {
 }
 
 let hotkeyCurrent: string[] = [];
+let hotkeyOffered: string[] = [];
 
 async function renderHotkey() {
   const h = await invoke<HotkeyChoices>("hotkey_choices");
   hotkeyCurrent = h.current;
+  hotkeyOffered = h.keys.map((k) => k.name);
   $("hotkey").textContent = h.label;
   $("hotkey-current").textContent = `now: ${h.label}`;
   $("hotkey-keys").innerHTML = h.keys
@@ -343,8 +345,10 @@ async function renderHotkey() {
   $<HTMLButtonElement>("hotkey-apply").disabled = true;
 }
 
+/** The ticked boxes, plus any key in the hotkey that has no box (written into the config by hand). */
 function pickedKeys(): string[] {
-  return Array.from(document.querySelectorAll<HTMLInputElement>("#hotkey-keys input:checked"), (i) => i.value);
+  const unboxed = hotkeyCurrent.filter((k) => !hotkeyOffered.includes(k));
+  return [...unboxed, ...Array.from(document.querySelectorAll<HTMLInputElement>("#hotkey-keys input:checked"), (i) => i.value)];
 }
 
 async function applyHotkey() {
