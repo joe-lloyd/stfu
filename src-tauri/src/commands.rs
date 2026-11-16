@@ -613,10 +613,13 @@ pub struct HotkeyChoices {
 
 #[tauri::command]
 pub fn hotkey_choices(state: State<'_, SharedConfig>) -> HotkeyChoices {
-    let current = state.read().unwrap().hotkey.clone();
+    let configured = state.read().unwrap().hotkey.clone();
+    // In the names the picker offers, so a hand-written "Fn" still ticks the Fn box and is kept
+    // when another key is added.
+    let current = configured.iter().map(|k| crate::hotkey::canonical(k)).collect();
     HotkeyChoices {
         keys: crate::hotkey::CHOICES.to_vec(),
-        label: crate::hotkey::label(&current),
+        label: crate::hotkey::label(&configured),
         current,
     }
 }

@@ -810,6 +810,11 @@ fn pipeline_loop(
                 recording = false;
                 holding.store(false, Ordering::SeqCst);
                 let wav = recorder.stop();
+                // Every take's recording ends here, including the ones dropped below as too
+                // short or silent, which never send another state: the pill closes its report.
+                if PILL_OWNER.load(Ordering::SeqCst) == take_no {
+                    let _ = app.emit_to(PILL, "recording-ended", ());
+                }
                 let held = started_at.elapsed();
                 let snapshot = cfg.read().unwrap().clone();
                 let mut rec = std::mem::replace(&mut take, history::new_record());

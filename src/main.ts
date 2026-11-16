@@ -115,6 +115,9 @@ listen<number>("level", (e) => {
   levels[BARS - 1] = Math.min(1, Math.pow(e.payload * 7, 0.65));
 });
 
+// Sent when the hotkey is released, also for takes dropped as too short or silent.
+listen("recording-ended", () => sendReport());
+
 listen<StateEvent>("state", (e) => {
   const next = e.payload.phase;
   if (next !== phase) phaseStart = performance.now();

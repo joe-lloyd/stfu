@@ -37,19 +37,40 @@ pub const CHOICES: &[Choice] = &[
     Choice { name: "ShiftRight", label: "Right Shift" },
 ];
 
+/// The name Settings offers for a key the config may spell differently ("Fn", "ShiftLeft",
+/// "CommandLeft", ...), so an existing hotkey ticks the right boxes. Names with no offered
+/// equivalent come back unchanged.
+pub fn canonical(name: &str) -> String {
+    #[cfg(target_os = "macos")]
+    let offered = match name {
+        "Fn" => "Function",
+        "ShiftLeft" | "ShiftRight" => "Shift",
+        "ControlLeft" | "ControlRight" => "Control",
+        "Alt" | "AltGr" | "AltLeft" | "AltRight" | "OptionLeft" | "OptionRight" => "Option",
+        "Meta" | "MetaLeft" | "MetaRight" | "CommandLeft" | "CommandRight" => "Command",
+        other => other,
+    };
+    #[cfg(not(target_os = "macos"))]
+    let offered = match name {
+        "Fn" => "Function",
+        "Control" => "ControlLeft",
+        "Meta" | "WinLeft" | "CommandLeft" => "MetaLeft",
+        "AltLeft" | "OptionLeft" => "Alt",
+        "AltRight" | "OptionRight" => "AltGr",
+        "Shift" => "ShiftLeft",
+        other => other,
+    };
+    offered.to_string()
+}
+
 /// How a hotkey reads to a person, e.g. "Fn + Shift". Names the picker does not offer (written
 /// into the config by hand) are shown as they are.
 pub fn label(names: &[String]) -> String {
     names
         .iter()
         .map(|n| {
-            let n = n.as_str();
-            match n {
-                "Fn" => "Fn",
-                "ShiftLeft" | "ShiftRight" if cfg!(target_os = "macos") => "Shift",
-                "MetaLeft" | "MetaRight" | "CommandLeft" | "CommandRight" if cfg!(target_os = "macos") => "Command",
-                _ => CHOICES.iter().find(|c| c.name == n).map_or(n, |c| c.label),
-            }
+            let n = canonical(n);
+            CHOICES.iter().find(|c| c.name == n).map_or(n, |c| c.label.to_string())
         })
         .collect::<Vec<_>>()
         .join(" + ")
@@ -299,9 +320,27 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
+    fn hand_written_names_tick_the_offered_boxes() {
+        let names: Vec<String> = ["Fn", "ShiftLeft", "CommandRight"].iter().map(|n| canonical(n)).collect();
+        assert_eq!(names, ["Function", "Shift", "Command"]);
+        assert!(names.iter().all(|n| CHOICES.iter().any(|c| c.name == *n)));
+        assert_eq!(canonical("CapsLock"), "CapsLock", "unknown names are kept");
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn hand_written_names_tick_the_offered_boxes() {
+        let names: Vec<String> = ["Control", "Shift", "WinLeft"].iter().map(|n| canonical(n)).collect();
+        assert_eq!(names, ["ControlLeft", "ShiftLeft", "MetaLeft"]);
+        assert!(names.iter().all(|n| CHOICES.iter().any(|c| c.name == *n)));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
     fn fn_and_shift_read_well() {
         let combo = vec!["Function".to_string(), "Shift".to_string()];
         assert!(validate(&combo).is_ok());
         assert_eq!(label(&combo), "Fn + Shift");
+        assert_eq!(label(&["Fn".to_string(), "ShiftLeft".to_string()]), "Fn + Shift");
     }
 }
