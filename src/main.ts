@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
 type Phase = "recording" | "processing" | "done" | "error";
@@ -13,6 +14,20 @@ const levels = new Float32Array(BARS);   // target heights 0..1, newest at the e
 const shown = new Float32Array(BARS);    // eased heights actually drawn
 let phase: Phase = "recording";
 let phaseStart = performance.now();
+
+// What this recording looked like from in here, reported to the log when it ends. A webview the
+// OS has suspended draws nothing and hears no levels; the log then says so.
+const take = { active: false, start: 0, frames: 0, levels: 0, peak: 0, visibility: "" };
+function startReport() {
+  Object.assign(take, { active: true, start: performance.now(), frames: 0, levels: 0, peak: 0, visibility: document.visibilityState });
+}
+document.addEventListener("visibilitychange", () => { if (take.active) take.visibility += `>${document.visibilityState}`; });
+function sendReport() {
+  if (!take.active) return;
+  take.active = false;
+  const report = { ms: performance.now() - take.start, frames: take.frames, levels: take.levels, peak: take.peak, visibility: `${take.visibility}, ${document.visibilityState} at end` };
+  invoke("pill_report", { report }).catch(() => {});
+}
 
 const COLORS: Record<Phase, string> = {
   recording: "#8fd6ff",
@@ -52,6 +67,7 @@ function frame(now: number) {
   const t = (now - phaseStart) / 1000;
 
   if (phase === "recording") {
+    if (take.active) take.frames++;
     // Ease displayed bars towards live levels; scroll right-to-left as new samples arrive.
     for (let i = 0; i < BARS; i++) shown[i] += (levels[i] - shown[i]) * 0.45;
     drawBars(shown, COLORS.recording);
@@ -93,6 +109,7 @@ function showMessage(p: Phase, message?: string) {
 }
 
 listen<number>("level", (e) => {
+  if (take.active) { take.levels++; take.peak = Math.max(take.peak, e.payload); }
   levels.copyWithin(0, 1);
   // Boost quiet speech so the wave is lively; clamp to 1.
   levels[BARS - 1] = Math.min(1, Math.pow(e.payload * 7, 0.65));
@@ -101,9 +118,12 @@ listen<number>("level", (e) => {
 listen<StateEvent>("state", (e) => {
   const next = e.payload.phase;
   if (next !== phase) phaseStart = performance.now();
+  if (next !== "recording") sendReport();
   phase = next;
   showMessage(phase, e.payload.message);
   if (phase === "recording") {
+    sendReport();
+    startReport();
     levels.fill(0); shown.fill(0);
     // The window may have been laid out while off-screen or hidden (Windows): re-measure the
     // canvas, and replay the pop-in so the last take's faded-out frame never lingers.

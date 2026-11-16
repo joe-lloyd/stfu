@@ -9,6 +9,70 @@
 use anyhow::{anyhow, Result};
 use std::sync::mpsc::Sender;
 
+/// A key the Settings picker offers: the name stored in the config and what the user sees.
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+pub struct Choice {
+    pub name: &'static str,
+    pub label: &'static str,
+}
+
+/// The keys a hotkey can be made of, in the order Settings shows them. Only keys that are held
+/// down make sense for hold-to-talk, so these are the modifiers.
+#[cfg(target_os = "macos")]
+pub const CHOICES: &[Choice] = &[
+    Choice { name: "Function", label: "Fn" },
+    Choice { name: "Shift", label: "Shift" },
+    Choice { name: "Control", label: "Control" },
+    Choice { name: "Option", label: "Option" },
+    Choice { name: "Command", label: "Command" },
+];
+#[cfg(not(target_os = "macos"))]
+pub const CHOICES: &[Choice] = &[
+    Choice { name: "ControlLeft", label: "Left Ctrl" },
+    Choice { name: "ControlRight", label: "Right Ctrl" },
+    Choice { name: "MetaLeft", label: "Win" },
+    Choice { name: "Alt", label: "Alt" },
+    Choice { name: "AltGr", label: "AltGr" },
+    Choice { name: "ShiftLeft", label: "Left Shift" },
+    Choice { name: "ShiftRight", label: "Right Shift" },
+];
+
+/// How a hotkey reads to a person, e.g. "Fn + Shift". Names the picker does not offer (written
+/// into the config by hand) are shown as they are.
+pub fn label(names: &[String]) -> String {
+    names
+        .iter()
+        .map(|n| {
+            let n = n.as_str();
+            match n {
+                "Fn" => "Fn",
+                "ShiftLeft" | "ShiftRight" if cfg!(target_os = "macos") => "Shift",
+                "MetaLeft" | "MetaRight" | "CommandLeft" | "CommandRight" if cfg!(target_os = "macos") => "Command",
+                _ => CHOICES.iter().find(|c| c.name == n).map_or(n, |c| c.label),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" + ")
+}
+
+/// Checks a hotkey before it is used: every key must exist on this platform, and it must not
+/// fire during ordinary typing.
+pub fn validate(names: &[String]) -> Result<()> {
+    if names.is_empty() {
+        return Err(anyhow!("pick at least one key"));
+    }
+    for n in names {
+        parse_key(n)?;
+    }
+    let only_shift = names.iter().all(|n| n.starts_with("Shift"));
+    if only_shift {
+        return Err(anyhow!(
+            "Shift on its own would start dictating on every capital letter; add another key"
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HotkeyEvent {
     Down,
@@ -22,9 +86,19 @@ mod imp {
         CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement,
         CGEventType, CallbackResult,
     };
+    use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
     use std::sync::Mutex;
 
     pub type Key = CGEventFlags;
+
+    /// The flags that must all be held, read by the event tap on every event so Settings can
+    /// change the hotkey without a restart. Zero means no hotkey.
+    static REQUIRED: AtomicU64 = AtomicU64::new(0);
+
+    pub fn set_combo(combo: Vec<Key>) {
+        let required = combo.into_iter().fold(CGEventFlags::empty(), |a, k| a | k);
+        REQUIRED.store(required.bits(), AtomicOrdering::SeqCst);
+    }
 
     /// On macOS the hotkey is a set of modifier flags; left/right variants are treated alike.
     pub fn parse_key(name: &str) -> Result<Key> {
@@ -44,10 +118,7 @@ mod imp {
     }
 
     pub fn spawn(combo: Vec<Key>, tx: Sender<HotkeyEvent>) {
-        let mut required = CGEventFlags::empty();
-        for k in combo {
-            required |= k;
-        }
+        set_combo(combo);
         std::thread::Builder::new()
             .name("hotkey".into())
             .spawn(move || {
@@ -76,7 +147,9 @@ mod imp {
                             _ => {}
                         }
                         let flags = event.get_flags();
-                        let all_held = flags.contains(required);
+                        let required =
+                            CGEventFlags::from_bits_truncate(REQUIRED.load(AtomicOrdering::SeqCst));
+                        let all_held = !required.is_empty() && flags.contains(required);
                         log::debug!(
                             "tap event {:?} keycode {} flags {:#x} held={all_held}",
                             etype,
@@ -137,8 +210,17 @@ mod imp {
     use super::*;
     use rdev::{Event, EventType};
     use std::collections::HashSet;
+    use std::sync::Mutex;
 
     pub type Key = rdev::Key;
+
+    /// The keys that must all be held, read on every key event so Settings can change the hotkey
+    /// without a restart. Empty means no hotkey.
+    static COMBO: Mutex<Vec<Key>> = Mutex::new(Vec::new());
+
+    pub fn set_combo(combo: Vec<Key>) {
+        *COMBO.lock().unwrap() = combo;
+    }
 
     pub fn parse_key(name: &str) -> Result<Key> {
         use rdev::Key::*;
@@ -158,6 +240,7 @@ mod imp {
     }
 
     pub fn spawn(combo: Vec<Key>, tx: Sender<HotkeyEvent>) {
+        set_combo(combo);
         std::thread::Builder::new()
             .name("hotkey".into())
             .spawn(move || {
@@ -173,7 +256,10 @@ mod imp {
                         }
                         _ => return,
                     }
-                    let all_held = combo.iter().all(|k| held.contains(k));
+                    let all_held = {
+                        let combo = COMBO.lock().unwrap();
+                        !combo.is_empty() && combo.iter().all(|k| held.contains(k))
+                    };
                     if all_held && !active {
                         active = true;
                         let _ = tx.send(HotkeyEvent::Down);
@@ -190,4 +276,32 @@ mod imp {
     }
 }
 
-pub use imp::{parse_key, spawn};
+pub use imp::{parse_key, set_combo, spawn};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_offered_key_parses() {
+        for c in CHOICES {
+            parse_key(c.name).unwrap_or_else(|e| panic!("{}: {e}", c.name));
+        }
+    }
+
+    #[test]
+    fn shift_alone_is_refused() {
+        let shift = CHOICES.iter().find(|c| c.name.starts_with("Shift")).unwrap().name;
+        assert!(validate(&[shift.to_string()]).is_err());
+        assert!(validate(&[]).is_err());
+        assert!(validate(&["Nope".to_string()]).is_err());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn fn_and_shift_read_well() {
+        let combo = vec!["Function".to_string(), "Shift".to_string()];
+        assert!(validate(&combo).is_ok());
+        assert_eq!(label(&combo), "Fn + Shift");
+    }
+}

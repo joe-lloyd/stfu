@@ -59,9 +59,13 @@ impl Profile {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    /// Keys that must all be held to record. Names follow rdev's `Key` enum:
-    /// Function, ControlLeft, ControlRight, MetaLeft, MetaRight, Alt, AltGr, ShiftLeft, ShiftRight.
+    /// Keys that must all be held to record. Settings offers the names in `hotkey::CHOICES`;
+    /// macOS also accepts Fn, Command and Option variants, others rdev's `Key` names.
     pub hotkey: Vec<String>,
+    /// Which hotkey default this config has been brought up to (see `migrate`). Missing in
+    /// configs written before the field existed, which reads as 0.
+    #[serde(default)]
+    pub hotkey_rev: u32,
     /// Name of the profile currently in use.
     #[serde(default)]
     pub active_profile: String,
@@ -258,16 +262,22 @@ fn default_language() -> String {
     "en".to_string()
 }
 
+/// Bumped whenever the default hotkey changes, so existing installs move to the new default once.
+const HOTKEY_REV: u32 = 2;
+
+/// Fn + Shift on macOS: Fn alone is also the system's own dictation and emoji key, and was too
+/// easy to set off by accident.
+fn default_hotkey(macos: bool) -> Vec<String> {
+    let keys: &[&str] = if macos { &["Function", "Shift"] } else { &["ControlLeft", "MetaLeft"] };
+    keys.iter().map(|k| k.to_string()).collect()
+}
+
 impl Default for Config {
     fn default() -> Self {
-        let hotkey = if cfg!(target_os = "macos") {
-            vec!["Function".to_string()]
-        } else {
-            vec!["ControlLeft".to_string(), "MetaLeft".to_string()]
-        };
         let cloud = Profile::cloud();
         Self {
-            hotkey,
+            hotkey: default_hotkey(cfg!(target_os = "macos")),
+            hotkey_rev: HOTKEY_REV,
             active_profile: cloud.name.clone(),
             profiles: vec![cloud, Profile::local()],
             stt: None,
@@ -312,6 +322,7 @@ impl Config {
     /// Folds a pre-profiles config into a profile, and guarantees there is always a local option
     /// to switch to. Safe to call on an already-migrated config.
     fn migrate(&mut self) {
+        self.upgrade_hotkey(cfg!(target_os = "macos"));
         if self.profiles.is_empty() {
             let mut cloud = Profile::cloud();
             if let (Some(stt), Some(llm)) = (self.stt.take(), self.llm.take()) {
@@ -327,6 +338,20 @@ impl Config {
         if !self.profiles.iter().any(|p| p.name == self.active_profile) {
             self.active_profile = self.profiles[0].name.clone();
         }
+    }
+
+    /// Moves a hotkey that is still the old default to the current one, once. Fn alone was the
+    /// macOS default before there was any way to choose, so it was never picked on purpose; a
+    /// hotkey chosen in Settings afterwards (Fn alone included) is left alone.
+    fn upgrade_hotkey(&mut self, macos: bool) {
+        if self.hotkey_rev >= HOTKEY_REV {
+            return;
+        }
+        if macos && self.hotkey == ["Function"] {
+            log::info!("hotkey: moving the old Fn default to Fn + Shift");
+            self.hotkey = default_hotkey(true);
+        }
+        self.hotkey_rev = HOTKEY_REV;
     }
 
     pub fn path() -> Result<PathBuf> {
@@ -431,6 +456,32 @@ mod tests {
         assert_eq!(cfg.stt().language, "nl", "so does the language");
         assert_eq!(cfg.llm().model, "qwen/qwen3.8-27b");
         assert!(cfg.profiles.iter().any(|p| p.name == "Local (offline)"));
+    }
+
+    #[test]
+    fn the_old_fn_default_becomes_fn_shift_once() {
+        let mut cfg: Config = serde_json::from_str(r#"{"hotkey": ["Function"]}"#).unwrap();
+        assert_eq!(cfg.hotkey_rev, 0);
+        cfg.upgrade_hotkey(true);
+        assert_eq!(cfg.hotkey, ["Function", "Shift"]);
+        assert_eq!(cfg.hotkey_rev, HOTKEY_REV);
+
+        // Fn alone chosen again afterwards stays Fn alone.
+        cfg.hotkey = vec!["Function".into()];
+        cfg.upgrade_hotkey(true);
+        assert_eq!(cfg.hotkey, ["Function"]);
+    }
+
+    #[test]
+    fn a_chosen_or_non_mac_hotkey_is_kept() {
+        let mut cfg: Config = serde_json::from_str(r#"{"hotkey": ["Control", "Option"]}"#).unwrap();
+        cfg.upgrade_hotkey(true);
+        assert_eq!(cfg.hotkey, ["Control", "Option"]);
+
+        let mut cfg: Config = serde_json::from_str(r#"{"hotkey": ["Function"]}"#).unwrap();
+        cfg.upgrade_hotkey(false);
+        assert_eq!(cfg.hotkey, ["Function"], "only the macOS default moved");
+        assert_eq!(cfg.hotkey_rev, HOTKEY_REV);
     }
 
     #[test]

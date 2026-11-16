@@ -8,6 +8,7 @@ interface LlmConfig { enabled: boolean; base_url: string; model: string; api_key
 interface Profile { name: string; stt: SttConfig; llm: LlmConfig }
 interface Config {
   hotkey: string[];
+  hotkey_rev?: number;
   active_profile: string;
   profiles: Profile[];
   launch_at_login: boolean;
@@ -17,6 +18,7 @@ interface Config {
   meeting?: MeetingConfig;
 }
 type ClipboardMode = "when_no_text_field" | "always" | "never";
+interface HotkeyChoices { keys: { name: string; label: string }[]; current: string[]; label: string }
 interface LastDictation { text: string; ts: string; app: string | null }
 interface LocalStatus { ollama_up: boolean; ollama_models: string[]; whisper_up: boolean }
 
@@ -193,6 +195,7 @@ function collect(): Config {
   const edited = collectProfile();
   return {
     hotkey: cfg.hotkey,
+    hotkey_rev: cfg.hotkey_rev,
     active_profile: $<HTMLSelectElement>("profile-select").value,
     profiles: cfg.profiles.map((p) => (p.name === edited.name ? edited : p)),
     launch_at_login: cfg.launch_at_login,
@@ -308,7 +311,7 @@ async function load() {
     .map((l) => `<option value="${l.code}">${l.label}</option>`)
     .join("");
   $("cfgpath").textContent = await invoke<string>("config_path");
-  $("hotkey").textContent = cfg.hotkey.join(" + ");
+  await renderHotkey();
   $<HTMLInputElement>("auto-update").checked = cfg.auto_update ?? true;
   applyHistoryConfig(cfg.history);
   $<HTMLSelectElement>("clipboard-mode").value = cfg.clipboard ?? "when_no_text_field";
@@ -325,6 +328,34 @@ async function load() {
   const p = profileByName(editing);
   if (!p.stt.api_key) setStatus("stt-status", "No key yet. Click “Get a key”, paste it here, then Test.");
   if (!p.llm.api_key && p.llm.enabled) setStatus("llm-status", "No key yet. Click “Get a key”, paste it here, then Test.");
+}
+
+let hotkeyCurrent: string[] = [];
+
+async function renderHotkey() {
+  const h = await invoke<HotkeyChoices>("hotkey_choices");
+  hotkeyCurrent = h.current;
+  $("hotkey").textContent = h.label;
+  $("hotkey-current").textContent = `now: ${h.label}`;
+  $("hotkey-keys").innerHTML = h.keys
+    .map((k) => `<label><input type="checkbox" value="${k.name}"${h.current.includes(k.name) ? " checked" : ""}> ${k.label}</label>`)
+    .join("");
+  $<HTMLButtonElement>("hotkey-apply").disabled = true;
+}
+
+function pickedKeys(): string[] {
+  return Array.from(document.querySelectorAll<HTMLInputElement>("#hotkey-keys input:checked"), (i) => i.value);
+}
+
+async function applyHotkey() {
+  try {
+    const label = await invoke<string>("set_hotkey", { keys: pickedKeys() });
+    cfg.hotkey = pickedKeys();
+    await renderHotkey();
+    setStatus("hotkey-status", `Saved. Hold ${label} and talk.`, "ok");
+  } catch (e) {
+    setStatus("hotkey-status", String(e), "err");
+  }
 }
 
 function showLast(last: LastDictation | null) {
@@ -440,6 +471,13 @@ $("llm-show").addEventListener("click", () => toggleShow("llm-key"));
 $("stt-test").addEventListener("click", () => test("stt"));
 $("llm-test").addEventListener("click", () => test("llm"));
 $("save").addEventListener("click", save);
+$("hotkey-keys").addEventListener("change", () => {
+  const picked = pickedKeys();
+  const same = picked.length === hotkeyCurrent.length && picked.every((k) => hotkeyCurrent.includes(k));
+  $<HTMLButtonElement>("hotkey-apply").disabled = same || picked.length === 0;
+  setStatus("hotkey-status", "");
+});
+$("hotkey-apply").addEventListener("click", () => void applyHotkey());
 $("last-copy").addEventListener("click", () => void copyLast());
 $("clipboard-mode").addEventListener("change", async (e) => {
   const mode = (e.target as HTMLSelectElement).value as ClipboardMode;
