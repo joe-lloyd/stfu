@@ -26,8 +26,15 @@ pub fn save_config(
     state: State<'_, SharedConfig>,
     lang_menu: State<'_, LangMenu>,
     profile_menu: State<'_, ProfileMenu>,
-    cfg: Config,
+    mut cfg: Config,
 ) -> Result<(), String> {
+    // The hotkey is owned by `set_hotkey`, which applies it live; a save from a window that
+    // loaded the config earlier must not put an old hotkey back.
+    {
+        let live = state.read().unwrap();
+        cfg.hotkey = live.hotkey.clone();
+        cfg.hotkey_rev = live.hotkey_rev;
+    }
     cfg.save().map_err(|e| format!("{e:#}"))?;
     sync_profile_menu(&profile_menu, &cfg);
     let code = cfg.stt().language.trim().to_string();
@@ -592,6 +599,85 @@ pub fn set_clipboard_mode(
     cfg.save().map_err(|e| format!("{e:#}"))?;
     log::info!("clipboard mode: {mode:?}");
     Ok(())
+}
+
+#[derive(serde::Serialize)]
+pub struct HotkeyChoices {
+    /// Keys that can be part of a hotkey on this platform.
+    keys: Vec<crate::hotkey::Choice>,
+    /// The hotkey in use.
+    current: Vec<String>,
+    /// How it reads, e.g. "Fn + Shift".
+    label: String,
+}
+
+#[tauri::command]
+pub fn hotkey_choices(state: State<'_, SharedConfig>) -> HotkeyChoices {
+    let configured = state.read().unwrap().hotkey.clone();
+    // In the names the picker offers, so a hand-written "Fn" still ticks the Fn box and is kept
+    // when another key is added.
+    let current = crate::hotkey::picker_names(&configured);
+    HotkeyChoices {
+        keys: crate::hotkey::CHOICES.to_vec(),
+        label: crate::hotkey::label(&configured),
+        current,
+    }
+}
+
+/// Switches the hotkey right away (the key listener reads it on every key event) and saves it.
+/// Returns how the new hotkey reads.
+#[tauri::command]
+pub fn set_hotkey(
+    app: tauri::AppHandle,
+    state: State<'_, SharedConfig>,
+    keys: Vec<String>,
+) -> Result<String, String> {
+    crate::hotkey::validate(&keys).map_err(|e| format!("{e:#}"))?;
+    let parsed = keys
+        .iter()
+        .map(|k| crate::hotkey::parse_key(k))
+        .collect::<anyhow::Result<Vec<_>>>()
+        .map_err(|e| format!("{e:#}"))?;
+    {
+        let mut cfg = state.write().unwrap();
+        let mut next = cfg.clone();
+        next.hotkey = keys.clone();
+        next.save().map_err(|e| format!("{e:#}"))?;
+        *cfg = next;
+    }
+    crate::hotkey::set_combo(parsed);
+    let label = crate::hotkey::label(&keys);
+    crate::set_tray_tooltip(&app, &label);
+    log::info!("hotkey set to {label}");
+    Ok(label)
+}
+
+/// What the pill saw during one recording, sent when the recording ends. A pill that drew no
+/// frames or got no levels while the microphone was live shows up here instead of only on screen.
+#[derive(Debug, serde::Deserialize)]
+pub struct PillReport {
+    ms: f64,
+    frames: u32,
+    levels: u32,
+    peak: f32,
+    /// Height in px of the tallest bar measured during the take (2 = flat line).
+    #[serde(default)]
+    tallest: f32,
+    visibility: String,
+}
+
+#[tauri::command]
+pub fn pill_report(report: PillReport) {
+    let fps = if report.ms > 0.0 { report.frames as f64 * 1000.0 / report.ms } else { 0.0 };
+    log::info!(
+        "pill: {:.0} ms recording, {} frames ({fps:.0} fps), {} level events, peak {:.2}, tallest bar {:.0}px, page {}",
+        report.ms,
+        report.frames,
+        report.levels,
+        report.peak,
+        report.tallest,
+        report.visibility
+    );
 }
 
 #[derive(serde::Serialize)]

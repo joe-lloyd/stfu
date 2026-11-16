@@ -80,6 +80,10 @@
       .last-text.muted { color: #7f7f8a; font-style: italic; }
       .compress { display: flex; gap: 10px; align-items: center; margin-top: 10px; font-size: 12px; color: #b9b9c4; }
       .compress span { flex: 1; }
+      .keys { display: flex; flex-wrap: wrap; gap: 6px; }
+      .keys label { display: flex; align-items: center; gap: 6px; margin: 0; padding: 5px 10px; border: 1px solid #34343e; border-radius: 6px; background: #121216; color: #e8e8ec; cursor: pointer; }
+      .keys label:has(input:checked) { border-color: #7dd3fc; background: #14232c; }
+      .keys input { width: auto; margin: 0; }
       .apps { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 16px; margin-top: 10px; }
     </style>
   </head>
@@ -210,6 +214,16 @@
         <div class="hint">Pasting goes through the clipboard, and then whatever you had copied before is put back. When no text field has focus, the dictation stays on the clipboard instead, so you can paste it yourself. Chrome and Electron apps (Slack, VS Code, Teams, …) don't report whether a text field has focus, so there your old clipboard comes back as before. Copy the text from here, or use "Copy last dictation" in the menu bar.</div>
       </section>
 
+      <section id="hotkey-section">
+        <h2>Hotkey <span class="hint" id="hotkey-current" style="font-weight:400"></span></h2>
+        <div class="keys" id="hotkey-keys"></div>
+        <div class="row" style="margin-top:10px">
+          <button id="hotkey-apply" disabled>Use these keys</button>
+          <span class="status" id="hotkey-status" style="margin:0"></span>
+        </div>
+        <div class="hint">Hold every ticked key together to dictate, and let go to stop. The new keys work straight away. On a Mac, Fn on its own is also the system's dictation and emoji key; if it still opens those, set System Settings › Keyboard › "Press fn key to" to Do Nothing.</div>
+      </section>
+
       <section id="profile-bar">
         <h2>Profile</h2>
         <div class="row">
@@ -315,7 +329,7 @@
         <div class="status" id="save-status"></div>
         <button class="primary" id="save">Save</button>
       </footer>
-      <p class="hint">Keys are stored in <code id="cfgpath"></code>. Hotkey changes need an app restart.</p>
+      <p class="hint">Keys are stored in <code id="cfgpath"></code>. A new hotkey works as soon as you press “Use these keys”.</p>
       </div>
     </main>
     <script type="module" src="/src/settings.ts"></script>

@@ -37,6 +37,18 @@ use tauri::PhysicalPosition;
 
 const PILL: &str = "pill";
 const SETTINGS: &str = "settings";
+const TRAY: &str = "tray";
+
+fn tray_tooltip(hotkey: &str) -> String {
+    format!("stfu {} — hold {hotkey} to dictate", env!("CARGO_PKG_VERSION"))
+}
+
+/// Keeps the tray tooltip naming the hotkey in use after it changes.
+pub(crate) fn set_tray_tooltip(app: &AppHandle, hotkey: &str) {
+    if let Some(tray) = app.tray_by_id(TRAY) {
+        let _ = tray.set_tooltip(Some(tray_tooltip(hotkey)));
+    }
+}
 
 pub type SharedConfig = Arc<RwLock<Config>>;
 
@@ -476,6 +488,9 @@ pub fn run() {
             commands::meeting_delete_model,
             commands::meeting_open_folder,
             commands::meeting_set_apps,
+            commands::hotkey_choices,
+            commands::set_hotkey,
+            commands::pill_report,
         ])
         .on_window_event(|window, event| {
             // Closing the settings window hides it so it can be reopened from the tray.
@@ -571,9 +586,9 @@ pub fn run() {
             let shared_for_tray = shared.clone();
             let lang_items_for_tray = lang_items.clone();
             let language_menu_for_tray = language_menu.clone();
-            let mut tray = TrayIconBuilder::new()
+            let mut tray = TrayIconBuilder::with_id(TRAY)
                 .menu(&menu)
-                .tooltip(format!("stfu {} — hold {} to dictate", env!("CARGO_PKG_VERSION"), config.hotkey.join("+")))
+                .tooltip(tray_tooltip(&hotkey::label(&config.hotkey)))
                 .on_menu_event(move |app, event| match event.id.as_ref() {
                     "quit" => quit_app(app),
                     "settings" => show_settings(app),
@@ -787,6 +802,19 @@ fn pipeline_loop(
                     Err(e) => log::error!("start recording: {e:#}"),
                 }
             }
+            HotkeyEvent::Cancel => {
+                if !recording {
+                    continue;
+                }
+                recording = false;
+                holding.store(false, Ordering::SeqCst);
+                let _ = recorder.stop();
+                take = history::new_record();
+                if PILL_OWNER.load(Ordering::SeqCst) == take_no {
+                    let _ = app.emit_to(PILL, "recording-ended", ());
+                }
+                release_pill(&app, take_no);
+            }
             HotkeyEvent::Up => {
                 log::info!("hotkey up");
                 if !recording {
@@ -795,6 +823,11 @@ fn pipeline_loop(
                 recording = false;
                 holding.store(false, Ordering::SeqCst);
                 let wav = recorder.stop();
+                // Every take's recording ends here, including the ones dropped below as too
+                // short or silent, which never send another state: the pill closes its report.
+                if PILL_OWNER.load(Ordering::SeqCst) == take_no {
+                    let _ = app.emit_to(PILL, "recording-ended", ());
+                }
                 let held = started_at.elapsed();
                 let snapshot = cfg.read().unwrap().clone();
                 let mut rec = std::mem::replace(&mut take, history::new_record());

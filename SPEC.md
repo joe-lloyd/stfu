@@ -27,7 +27,7 @@ Compiled from wisprflow.ai/features, the What's New changelog through 2026-09-15
 
 | Feature | Description | Priority |
 |---|---|---|
-| Global push-to-talk hotkey | Hold a key (default: `Fn` on Mac, `Ctrl+Win` on Windows) anywhere in the OS; recording runs while held; release = transcribe + insert. | P0 |
+| Global push-to-talk hotkey | Hold a key (default: `Fn+Shift` on Mac, `Ctrl+Win` on Windows) anywhere in the OS; recording runs while held; release = transcribe + insert. | P0 |
 | Hands-free / toggle mode | Double-tap the hotkey (or a second binding) to lock recording on; press again to stop. | P0 |
 | Rebindable hotkey | Any modifier combination or single modifier; rejects combos the OS reserves. Separate binding for Command Mode. | P0 |
 | Cancel shortcut | Default `Esc` while recording discards the take; rebindable. | P0 |

@@ -9,10 +9,151 @@
 use anyhow::{anyhow, Result};
 use std::sync::mpsc::Sender;
 
+/// A key the Settings picker offers: the name stored in the config and what the user sees.
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+pub struct Choice {
+    pub name: &'static str,
+    pub label: &'static str,
+}
+
+/// The keys a hotkey can be made of, in the order Settings shows them. Only keys that are held
+/// down make sense for hold-to-talk, so these are the modifiers.
+#[cfg(target_os = "macos")]
+pub const CHOICES: &[Choice] = &[
+    Choice { name: "Function", label: "Fn" },
+    Choice { name: "Shift", label: "Shift" },
+    Choice { name: "Control", label: "Control" },
+    Choice { name: "Option", label: "Option" },
+    Choice { name: "Command", label: "Command" },
+];
+#[cfg(not(target_os = "macos"))]
+pub const CHOICES: &[Choice] = &[
+    Choice { name: "ControlLeft", label: "Left Ctrl" },
+    Choice { name: "ControlRight", label: "Right Ctrl" },
+    Choice { name: "MetaLeft", label: "Win" },
+    Choice { name: "Alt", label: "Alt" },
+    Choice { name: "AltGr", label: "AltGr" },
+    Choice { name: "ShiftLeft", label: "Left Shift" },
+    Choice { name: "ShiftRight", label: "Right Shift" },
+];
+
+/// The name Settings offers for a key the config may spell differently ("Fn", "ShiftLeft",
+/// "CommandLeft", ...), so an existing hotkey ticks the right boxes. Names with no offered
+/// equivalent come back unchanged.
+pub fn canonical(name: &str) -> String {
+    #[cfg(target_os = "macos")]
+    let offered = match name {
+        "Fn" => "Function",
+        "ShiftLeft" | "ShiftRight" => "Shift",
+        "ControlLeft" | "ControlRight" => "Control",
+        "Alt" | "AltGr" | "AltLeft" | "AltRight" | "OptionLeft" | "OptionRight" => "Option",
+        "Meta" | "MetaLeft" | "MetaRight" | "CommandLeft" | "CommandRight" => "Command",
+        other => other,
+    };
+    #[cfg(not(target_os = "macos"))]
+    let offered = match name {
+        "Fn" => "Function",
+        "Control" => "ControlLeft",
+        "Meta" | "WinLeft" | "CommandLeft" => "MetaLeft",
+        "AltLeft" | "OptionLeft" => "Alt",
+        "AltRight" | "OptionRight" => "AltGr",
+        "Shift" => "ShiftLeft",
+        other => other,
+    };
+    offered.to_string()
+}
+
+/// A configured hotkey in the picker's names: what Settings ticks, and the starting point of any
+/// edit there, so a hand-written "Fn" is still part of the hotkey after a key is added.
+pub fn picker_names(configured: &[String]) -> Vec<String> {
+    configured.iter().map(|k| canonical(k)).collect()
+}
+
+/// How a hotkey reads to a person, e.g. "Fn + Shift". Names the picker does not offer (written
+/// into the config by hand) are shown as they are.
+pub fn label(names: &[String]) -> String {
+    names
+        .iter()
+        .map(|n| {
+            let n = canonical(n);
+            CHOICES.iter().find(|c| c.name == n).map_or(n, |c| c.label.to_string())
+        })
+        .collect::<Vec<_>>()
+        .join(" + ")
+}
+
+/// Checks a hotkey before it is used: every key must exist on this platform, and it must not
+/// fire during ordinary typing.
+pub fn validate(names: &[String]) -> Result<()> {
+    if names.is_empty() {
+        return Err(anyhow!("pick at least one key"));
+    }
+    for n in names {
+        parse_key(n)?;
+    }
+    let only_shift = names.iter().all(|n| n.starts_with("Shift"));
+    if only_shift {
+        return Err(anyhow!(
+            "Shift on its own would start dictating on every capital letter; add another key"
+        ));
+    }
+    // A lone Option/AltGr types characters on many layouts (@, {, [), and a lone Command,
+    // Control or Win is held for every shortcut. Fn is the one modifier that is fine alone.
+    if names.len() == 1 && canonical(&names[0]) != "Function" {
+        return Err(anyhow!(
+            "{} on its own is held while typing and for shortcuts; add another key",
+            label(names)
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HotkeyEvent {
     Down,
     Up,
+    /// Another key was pressed while the hotkey was held (Fn+Shift+Arrow selects text on a
+    /// laptop): drop the take instead of dictating over the selection.
+    Cancel,
+}
+
+/// Where the listener is with the hotkey. A cancelled take stays cancelled until the keys are
+/// let go, so it does not restart while they are still held.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Hold {
+    Idle,
+    Active,
+    Cancelled,
+}
+
+impl Hold {
+    /// The hotkey's keys are (all_held) or are not all down.
+    fn keys(&mut self, all_held: bool) -> Option<HotkeyEvent> {
+        match (*self, all_held) {
+            (Hold::Idle, true) => {
+                *self = Hold::Active;
+                Some(HotkeyEvent::Down)
+            }
+            (Hold::Active, false) => {
+                *self = Hold::Idle;
+                Some(HotkeyEvent::Up)
+            }
+            (Hold::Cancelled, false) => {
+                *self = Hold::Idle;
+                None
+            }
+            _ => None,
+        }
+    }
+
+    /// A key that is not part of any hotkey went down.
+    fn other_key(&mut self) -> Option<HotkeyEvent> {
+        if *self == Hold::Active {
+            *self = Hold::Cancelled;
+            return Some(HotkeyEvent::Cancel);
+        }
+        None
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -22,9 +163,19 @@ mod imp {
         CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement,
         CGEventType, CallbackResult,
     };
+    use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
     use std::sync::Mutex;
 
     pub type Key = CGEventFlags;
+
+    /// The flags that must all be held, read by the event tap on every event so Settings can
+    /// change the hotkey without a restart. Zero means no hotkey.
+    static REQUIRED: AtomicU64 = AtomicU64::new(0);
+
+    pub fn set_combo(combo: Vec<Key>) {
+        let required = combo.into_iter().fold(CGEventFlags::empty(), |a, k| a | k);
+        REQUIRED.store(required.bits(), AtomicOrdering::SeqCst);
+    }
 
     /// On macOS the hotkey is a set of modifier flags; left/right variants are treated alike.
     pub fn parse_key(name: &str) -> Result<Key> {
@@ -44,10 +195,7 @@ mod imp {
     }
 
     pub fn spawn(combo: Vec<Key>, tx: Sender<HotkeyEvent>) {
-        let mut required = CGEventFlags::empty();
-        for k in combo {
-            required |= k;
-        }
+        set_combo(combo);
         std::thread::Builder::new()
             .name("hotkey".into())
             .spawn(move || {
@@ -55,17 +203,17 @@ mod imp {
                 use std::sync::atomic::{AtomicBool, Ordering};
                 use std::sync::Arc;
 
-                let active = Arc::new(Mutex::new(false));
+                let hold = Arc::new(Mutex::new(Hold::Idle));
                 let needs_reenable = Arc::new(AtomicBool::new(false));
                 let reenable_flag = needs_reenable.clone();
 
-                // Only modifier-flag changes matter for a modifier hotkey. Key up/down events
-                // can carry flags without the Fn bit and would read as a false release.
+                // Modifier-flag changes press and release the hotkey. Key-down events only cancel
+                // a held take: their flags can lack the Fn bit and would read as a false release.
                 let tap = CGEventTap::new(
                     CGEventTapLocation::HID,
                     CGEventTapPlacement::HeadInsertEventTap,
                     CGEventTapOptions::ListenOnly,
-                    vec![CGEventType::FlagsChanged],
+                    vec![CGEventType::FlagsChanged, CGEventType::KeyDown],
                     move |_proxy, etype, event| {
                         match etype {
                             CGEventType::TapDisabledByTimeout | CGEventType::TapDisabledByUserInput => {
@@ -75,8 +223,17 @@ mod imp {
                             }
                             _ => {}
                         }
+                        if matches!(etype, CGEventType::KeyDown) {
+                            if let Some(ev) = hold.lock().unwrap().other_key() {
+                                log::info!("key pressed while the hotkey was held; take dropped");
+                                let _ = tx.send(ev);
+                            }
+                            return CallbackResult::Keep;
+                        }
                         let flags = event.get_flags();
-                        let all_held = flags.contains(required);
+                        let required =
+                            CGEventFlags::from_bits_truncate(REQUIRED.load(AtomicOrdering::SeqCst));
+                        let all_held = !required.is_empty() && flags.contains(required);
                         log::debug!(
                             "tap event {:?} keycode {} flags {:#x} held={all_held}",
                             etype,
@@ -85,13 +242,8 @@ mod imp {
                             ),
                             flags.bits()
                         );
-                        let mut active = active.lock().unwrap();
-                        if all_held && !*active {
-                            *active = true;
-                            let _ = tx.send(HotkeyEvent::Down);
-                        } else if !all_held && *active {
-                            *active = false;
-                            let _ = tx.send(HotkeyEvent::Up);
+                        if let Some(ev) = hold.lock().unwrap().keys(all_held) {
+                            let _ = tx.send(ev);
                         }
                         CallbackResult::Keep
                     },
@@ -137,8 +289,26 @@ mod imp {
     use super::*;
     use rdev::{Event, EventType};
     use std::collections::HashSet;
+    use std::sync::Mutex;
 
     pub type Key = rdev::Key;
+
+    /// The keys that must all be held, read on every key event so Settings can change the hotkey
+    /// without a restart. Empty means no hotkey.
+    static COMBO: Mutex<Vec<Key>> = Mutex::new(Vec::new());
+
+    pub fn set_combo(combo: Vec<Key>) {
+        *COMBO.lock().unwrap() = combo;
+    }
+
+    fn is_modifier(k: Key) -> bool {
+        use rdev::Key::*;
+        matches!(
+            k,
+            ControlLeft | ControlRight | ShiftLeft | ShiftRight | Alt | AltGr | MetaLeft | MetaRight
+                | Function | CapsLock
+        )
+    }
 
     pub fn parse_key(name: &str) -> Result<Key> {
         use rdev::Key::*;
@@ -158,28 +328,41 @@ mod imp {
     }
 
     pub fn spawn(combo: Vec<Key>, tx: Sender<HotkeyEvent>) {
+        set_combo(combo);
         std::thread::Builder::new()
             .name("hotkey".into())
             .spawn(move || {
                 let mut held: HashSet<Key> = HashSet::new();
-                let mut active = false;
+                let mut hold = Hold::Idle;
                 let callback = move |event: Event| {
-                    match event.event_type {
+                    let pressed = match event.event_type {
                         EventType::KeyPress(k) => {
                             held.insert(k);
+                            Some(k)
                         }
                         EventType::KeyRelease(k) => {
                             held.remove(&k);
+                            None
                         }
                         _ => return,
+                    };
+                    let (all_held, in_combo) = {
+                        let combo = COMBO.lock().unwrap();
+                        let all = !combo.is_empty() && combo.iter().all(|k| held.contains(k));
+                        (all, pressed.is_some_and(|k| combo.contains(&k)))
+                    };
+                    // Any other non-modifier key while the hotkey is held drops the take.
+                    if let Some(k) = pressed {
+                        if !in_combo && !is_modifier(k) {
+                            if let Some(ev) = hold.other_key() {
+                                log::info!("key pressed while the hotkey was held; take dropped");
+                                let _ = tx.send(ev);
+                            }
+                            return;
+                        }
                     }
-                    let all_held = combo.iter().all(|k| held.contains(k));
-                    if all_held && !active {
-                        active = true;
-                        let _ = tx.send(HotkeyEvent::Down);
-                    } else if !all_held && active {
-                        active = false;
-                        let _ = tx.send(HotkeyEvent::Up);
+                    if let Some(ev) = hold.keys(all_held) {
+                        let _ = tx.send(ev);
                     }
                 };
                 if let Err(e) = rdev::listen(callback) {
@@ -190,4 +373,95 @@ mod imp {
     }
 }
 
-pub use imp::{parse_key, spawn};
+pub use imp::{parse_key, set_combo, spawn};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_offered_key_parses() {
+        for c in CHOICES {
+            parse_key(c.name).unwrap_or_else(|e| panic!("{}: {e}", c.name));
+        }
+    }
+
+    #[test]
+    fn a_lone_modifier_other_than_fn_is_refused() {
+        for c in CHOICES {
+            let one = [c.name.to_string()];
+            assert_eq!(validate(&one).is_ok(), c.name == "Function", "{} alone", c.name);
+        }
+    }
+
+    #[test]
+    fn another_key_cancels_a_held_take_until_the_keys_are_let_go() {
+        let mut h = Hold::Idle;
+        assert_eq!(h.keys(true), Some(HotkeyEvent::Down));
+        assert_eq!(h.other_key(), Some(HotkeyEvent::Cancel), "Fn+Shift+Left");
+        assert_eq!(h.other_key(), None);
+        assert_eq!(h.keys(true), None, "still held: no new take");
+        assert_eq!(h.keys(false), None, "let go: nothing to stop");
+        assert_eq!(h.keys(true), Some(HotkeyEvent::Down), "next press works");
+        assert_eq!(h.keys(false), Some(HotkeyEvent::Up));
+        assert_eq!(Hold::Idle.other_key(), None, "typing without the hotkey does nothing");
+    }
+
+    #[test]
+    fn shift_alone_is_refused() {
+        let shift = CHOICES.iter().find(|c| c.name.starts_with("Shift")).unwrap().name;
+        assert!(validate(&[shift.to_string()]).is_err());
+        assert!(validate(&[]).is_err());
+        assert!(validate(&["Nope".to_string()]).is_err());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn hand_written_names_tick_the_offered_boxes() {
+        let names: Vec<String> = ["Fn", "ShiftLeft", "CommandRight"].iter().map(|n| canonical(n)).collect();
+        assert_eq!(names, ["Function", "Shift", "Command"]);
+        assert!(names.iter().all(|n| CHOICES.iter().any(|c| c.name == *n)));
+        assert_eq!(canonical("CapsLock"), "CapsLock", "unknown names are kept");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn adding_a_key_to_a_hand_written_hotkey_keeps_its_keys() {
+        // Settings ticks picker_names, the user ticks Control too, and Apply sends the ticked boxes.
+        let configured = vec!["Fn".to_string(), "ShiftLeft".to_string()];
+        let mut edited = picker_names(&configured);
+        edited.push("Control".to_string());
+        assert_eq!(edited, ["Function", "Shift", "Control"]);
+        assert!(edited.iter().all(|n| CHOICES.iter().any(|c| c.name == *n)), "every key has a box");
+        assert!(validate(&edited).is_ok());
+        assert_eq!(label(&edited), "Fn + Shift + Control");
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn adding_a_key_to_a_hand_written_hotkey_keeps_its_keys() {
+        let configured = vec!["Control".to_string(), "WinLeft".to_string()];
+        let mut edited = picker_names(&configured);
+        edited.push("ShiftLeft".to_string());
+        assert_eq!(edited, ["ControlLeft", "MetaLeft", "ShiftLeft"]);
+        assert!(edited.iter().all(|n| CHOICES.iter().any(|c| c.name == *n)), "every key has a box");
+        assert!(validate(&edited).is_ok());
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn hand_written_names_tick_the_offered_boxes() {
+        let names: Vec<String> = ["Control", "Shift", "WinLeft"].iter().map(|n| canonical(n)).collect();
+        assert_eq!(names, ["ControlLeft", "ShiftLeft", "MetaLeft"]);
+        assert!(names.iter().all(|n| CHOICES.iter().any(|c| c.name == *n)));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn fn_and_shift_read_well() {
+        let combo = vec!["Function".to_string(), "Shift".to_string()];
+        assert!(validate(&combo).is_ok());
+        assert_eq!(label(&combo), "Fn + Shift");
+        assert_eq!(label(&["Fn".to_string(), "ShiftLeft".to_string()]), "Fn + Shift");
+    }
+}

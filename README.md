@@ -31,7 +31,7 @@ Windows (PowerShell):
 irm https://raw.githubusercontent.com/joe-lloyd/stfu/main/scripts/install.ps1 | iex
 ```
 
-Pin a version with `STFU_VERSION=v0.1.0` (or `$env:STFU_VERSION`). Windows hotkey is **Ctrl+Win**; macOS is **Fn**.
+Pin a version with `STFU_VERSION=v0.1.0` (or `$env:STFU_VERSION`). Windows hotkey is **Ctrl+Win**; macOS is **Fn+Shift**. Change it in Settings › Hotkey.
 
 ## Launch at login
 
@@ -129,13 +129,13 @@ or put them in the config file created on first launch:
 
 ```json
 {
-  "hotkey": ["Function"],
+  "hotkey": ["Function", "Shift"],
   "stt": { "base_url": "https://api.groq.com/openai/v1", "model": "whisper-large-v3-turbo", "api_key": "", "language": "" },
   "llm": { "enabled": true, "base_url": "https://api.groq.com/openai/v1", "model": "qwen/qwen3.8-27b", "api_key": "", "timeout_secs": 8 }
 }
 ```
 
-Hotkey names: `Function`, `ControlLeft`, `ControlRight`, `MetaLeft`, `MetaRight`, `Alt`, `AltGr`, `ShiftLeft`, `ShiftRight`, `CapsLock`. Multiple names means all must be held. On macOS the listener reads modifier flags, so left and right variants are treated the same and only modifier keys can be used. Windows default is `["ControlLeft", "MetaLeft"]` (Ctrl+Win).
+The easiest way to change the hotkey is Settings › Hotkey: tick the keys and press "Use these keys"; it works straight away. In the file, hotkey names are `Function`, `Shift`, `Control`, `Option`, `Command` on macOS and `ControlLeft`, `ControlRight`, `MetaLeft`, `MetaRight`, `Alt`, `AltGr`, `ShiftLeft`, `ShiftRight` elsewhere. Multiple names means all must be held. On macOS the listener reads modifier flags, so left and right variants are treated the same and only modifier keys can be used. Windows default is `["ControlLeft", "MetaLeft"]` (Ctrl+Win).
 
 Set `llm.enabled` to `false` to paste the raw transcript with no cleanup. Any OpenAI-compatible provider works for either role, including a local Ollama or LM Studio server (`http://localhost:11434/v1`).
 
@@ -157,7 +157,7 @@ Builds are signed with a local self-signed identity named `stfu Dev Signing` so 
 
 Logs: `~/Library/Application Support/stfu/stfu.log`. Last recording: `last.wav` in the same folder.
 
-The default macOS hotkey is `Fn`. macOS binds `Fn` to dictation or emoji by default: turn that off in System Settings > Keyboard > "Press fn key to" > Do Nothing, otherwise both fire.
+The default macOS hotkey is `Fn+Shift` (installs that still had the old `Fn`-only default move to it once; a hotkey picked in Settings is kept). If you pick `Fn` on its own, macOS also binds it to dictation or emoji: turn that off in System Settings > Keyboard > "Press fn key to" > Do Nothing, otherwise both fire.
 
 ### Windows
 

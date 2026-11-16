@@ -27,7 +27,8 @@
         "focusable": false,
         "skipTaskbar": true,
         "visibleOnAllWorkspaces": true,
-        "acceptFirstMouse": false
+        "acceptFirstMouse": false,
+        "backgroundThrottling": "disabled"
       },
       {
         "label": "settings",
