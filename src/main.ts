@@ -23,15 +23,15 @@ let phaseStart = performance.now();
 
 // What this recording looked like from in here, reported to the log when it ends. A webview the
 // OS has suspended draws nothing and hears no levels; the log then says so.
-const take = { active: false, start: 0, frames: 0, levels: 0, peak: 0, visibility: "" };
+const take = { active: false, start: 0, frames: 0, levels: 0, peak: 0, visibility: "", tallest: 0 };
 function startReport() {
-  Object.assign(take, { active: true, start: performance.now(), frames: 0, levels: 0, peak: 0, visibility: document.visibilityState });
+  Object.assign(take, { active: true, start: performance.now(), frames: 0, levels: 0, peak: 0, visibility: document.visibilityState, tallest: 0 });
 }
 document.addEventListener("visibilitychange", () => { if (take.active) take.visibility += `>${document.visibilityState}`; });
 function sendReport() {
   if (!take.active) return;
   take.active = false;
-  const report = { ms: performance.now() - take.start, frames: take.frames, levels: take.levels, peak: take.peak, visibility: `${take.visibility}, ${document.visibilityState} at end` };
+  const report = { ms: performance.now() - take.start, frames: take.frames, levels: take.levels, peak: take.peak, tallest: take.tallest, visibility: `${take.visibility}, ${document.visibilityState} at end` };
   invoke("pill_report", { report }).catch(() => {});
 }
 
@@ -50,6 +50,10 @@ function frame(now: number) {
     // Ease displayed bars towards live levels; scroll right-to-left as new samples arrive.
     for (let i = 0; i < BARS; i++) shown[i] += (levels[i] - shown[i]) * 0.45;
     drawBars(shown);
+    // Now and then, measure what was actually laid out: proof in the log that the bars move.
+    if (take.active && take.frames % 10 === 0) {
+      for (const b of bars) take.tallest = Math.max(take.tallest, b.getBoundingClientRect().height);
+    }
   } else if (phase === "processing") {
     // Travelling wave: two sines with different speeds, amplitude swells over the first 300 ms.
     const swell = Math.min(1, t / 0.3);

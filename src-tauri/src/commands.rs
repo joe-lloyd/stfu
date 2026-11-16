@@ -660,6 +660,9 @@ pub struct PillReport {
     frames: u32,
     levels: u32,
     peak: f32,
+    /// Height in px of the tallest bar measured during the take (2 = flat line).
+    #[serde(default)]
+    tallest: f32,
     visibility: String,
 }
 
@@ -667,11 +670,12 @@ pub struct PillReport {
 pub fn pill_report(report: PillReport) {
     let fps = if report.ms > 0.0 { report.frames as f64 * 1000.0 / report.ms } else { 0.0 };
     log::info!(
-        "pill: {:.0} ms recording, {} frames ({fps:.0} fps), {} level events, peak {:.2}, page {}",
+        "pill: {:.0} ms recording, {} frames ({fps:.0} fps), {} level events, peak {:.2}, tallest bar {:.0}px, page {}",
         report.ms,
         report.frames,
         report.levels,
         report.peak,
+        report.tallest,
         report.visibility
     );
 }
