@@ -6,10 +6,16 @@ interface StateEvent { phase: Phase; message?: string }
 
 const pill = document.getElementById("pill") as HTMLDivElement;
 const msg = document.getElementById("msg") as HTMLDivElement;
-const canvas = document.getElementById("wave") as HTMLCanvasElement;
-const ctx = canvas.getContext("2d")!;
+const wave = document.getElementById("wave") as HTMLDivElement;
 
+// The wave is plain elements, not a <canvas>. On macOS a canvas in this window could keep showing
+// an old frame (the last take's orange "processing" wave) after the window was hidden and shown
+// again, while the script went on drawing into it unseen. Elements go through the same path as
+// the rest of the pill, which always repaints.
 const BARS = 32;
+const bars: HTMLElement[] = [];
+for (let i = 0; i < BARS; i++) bars.push(wave.appendChild(document.createElement("i")));
+
 const levels = new Float32Array(BARS);   // target heights 0..1, newest at the end
 const shown = new Float32Array(BARS);    // eased heights actually drawn
 let phase: Phase = "recording";
@@ -29,48 +35,21 @@ function sendReport() {
   invoke("pill_report", { report }).catch(() => {});
 }
 
-const COLORS: Record<Phase, string> = {
-  recording: "#8fd6ff",
-  processing: "#f5c542",
-  done: "#3ddc84",
-  error: "#ff4d4f",
-};
-
-function resize() {
-  const dpr = window.devicePixelRatio || 1;
-  canvas.width = canvas.clientWidth * dpr;
-  canvas.height = canvas.clientHeight * dpr;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-}
-window.addEventListener("resize", resize);
-resize();
-
-function drawBars(heights: Float32Array, color: string, alpha = 1) {
-  const w = canvas.clientWidth, h = canvas.clientHeight;
-  const gap = 2.5;
-  const bw = (w - gap * (BARS - 1)) / BARS;
-  ctx.globalAlpha = alpha;
-  ctx.fillStyle = color;
+/** Sets each bar's height as a fraction (0..1) of the wave's height; never thinner than a dot. */
+function drawBars(heights: Float32Array) {
   for (let i = 0; i < BARS; i++) {
-    const bh = Math.max(2, heights[i] * h * 0.85);
-    const x = i * (bw + gap);
-    ctx.beginPath();
-    ctx.roundRect(x, (h - bh) / 2, bw, bh, bw / 2);
-    ctx.fill();
+    bars[i].style.height = `max(2px, ${(heights[i] * 85).toFixed(1)}%)`;
   }
-  ctx.globalAlpha = 1;
 }
 
 function frame(now: number) {
-  const w = canvas.clientWidth, h = canvas.clientHeight;
-  ctx.clearRect(0, 0, w, h);
   const t = (now - phaseStart) / 1000;
 
   if (phase === "recording") {
     if (take.active) take.frames++;
     // Ease displayed bars towards live levels; scroll right-to-left as new samples arrive.
     for (let i = 0; i < BARS; i++) shown[i] += (levels[i] - shown[i]) * 0.45;
-    drawBars(shown, COLORS.recording);
+    drawBars(shown);
   } else if (phase === "processing") {
     // Travelling wave: two sines with different speeds, amplitude swells over the first 300 ms.
     const swell = Math.min(1, t / 0.3);
@@ -80,22 +59,11 @@ function frame(now: number) {
       const target = (0.15 + v * 0.75) * swell;
       shown[i] += (target - shown[i]) * 0.35;
     }
-    drawBars(shown, COLORS.processing);
+    drawBars(shown);
   } else if (phase === "done") {
-    // Settle to a flat line while a ripple runs out from the centre, then a soft glow.
+    // Settle to a flat line; the ripple out from the centre is a CSS animation (index.html).
     for (let i = 0; i < BARS; i++) shown[i] += (0.06 - shown[i]) * 0.25;
-    drawBars(shown, COLORS.done);
-    const r = Math.min(1, t / 0.45);
-    if (r < 1) {
-      const cx = w / 2, cy = h / 2;
-      ctx.strokeStyle = COLORS.done;
-      ctx.globalAlpha = (1 - r) * 0.9;
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.ellipse(cx, cy, 6 + r * (w / 2), Math.min(cy - 2, 4 + r * 10), 0, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.globalAlpha = 1;
-    }
+    drawBars(shown);
   }
   requestAnimationFrame(frame);
 }
@@ -128,9 +96,8 @@ listen<StateEvent>("state", (e) => {
     sendReport();
     startReport();
     levels.fill(0); shown.fill(0);
-    // The window may have been laid out while off-screen or hidden (Windows): re-measure the
-    // canvas, and replay the pop-in so the last take's faded-out frame never lingers.
-    if (canvas.width !== Math.round(canvas.clientWidth * (window.devicePixelRatio || 1))) resize();
+    drawBars(shown);
+    // Replay the pop-in so the last take's faded-out frame never lingers.
     pill.style.animation = "none";
     void pill.offsetWidth;
     pill.style.animation = "";
