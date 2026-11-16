@@ -63,6 +63,12 @@ pub fn canonical(name: &str) -> String {
     offered.to_string()
 }
 
+/// A configured hotkey in the picker's names: what Settings ticks, and the starting point of any
+/// edit there, so a hand-written "Fn" is still part of the hotkey after a key is added.
+pub fn picker_names(configured: &[String]) -> Vec<String> {
+    configured.iter().map(|k| canonical(k)).collect()
+}
+
 /// How a hotkey reads to a person, e.g. "Fn + Shift". Names the picker does not offer (written
 /// into the config by hand) are shown as they are.
 pub fn label(names: &[String]) -> String {
@@ -325,6 +331,30 @@ mod tests {
         assert_eq!(names, ["Function", "Shift", "Command"]);
         assert!(names.iter().all(|n| CHOICES.iter().any(|c| c.name == *n)));
         assert_eq!(canonical("CapsLock"), "CapsLock", "unknown names are kept");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn adding_a_key_to_a_hand_written_hotkey_keeps_its_keys() {
+        // Settings ticks picker_names, the user ticks Control too, and Apply sends the ticked boxes.
+        let configured = vec!["Fn".to_string(), "ShiftLeft".to_string()];
+        let mut edited = picker_names(&configured);
+        edited.push("Control".to_string());
+        assert_eq!(edited, ["Function", "Shift", "Control"]);
+        assert!(edited.iter().all(|n| CHOICES.iter().any(|c| c.name == *n)), "every key has a box");
+        assert!(validate(&edited).is_ok());
+        assert_eq!(label(&edited), "Fn + Shift + Control");
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn adding_a_key_to_a_hand_written_hotkey_keeps_its_keys() {
+        let configured = vec!["Control".to_string(), "WinLeft".to_string()];
+        let mut edited = picker_names(&configured);
+        edited.push("ShiftLeft".to_string());
+        assert_eq!(edited, ["ControlLeft", "MetaLeft", "ShiftLeft"]);
+        assert!(edited.iter().all(|n| CHOICES.iter().any(|c| c.name == *n)), "every key has a box");
+        assert!(validate(&edited).is_ok());
     }
 
     #[cfg(not(target_os = "macos"))]

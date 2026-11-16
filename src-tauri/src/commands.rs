@@ -616,7 +616,7 @@ pub fn hotkey_choices(state: State<'_, SharedConfig>) -> HotkeyChoices {
     let configured = state.read().unwrap().hotkey.clone();
     // In the names the picker offers, so a hand-written "Fn" still ticks the Fn box and is kept
     // when another key is added.
-    let current = configured.iter().map(|k| crate::hotkey::canonical(k)).collect();
+    let current = crate::hotkey::picker_names(&configured);
     HotkeyChoices {
         keys: crate::hotkey::CHOICES.to_vec(),
         label: crate::hotkey::label(&configured),
