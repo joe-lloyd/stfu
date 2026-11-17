@@ -109,10 +109,11 @@ fn same(a: char, b: char) -> bool {
     a == b || a.to_lowercase().eq(b.to_lowercase())
 }
 
-/// Where a match of `p` starting at `i` ends, and how many of those chars are a plural or
-/// possessive "s" to keep ("Kuhns" -> "Koens"). Words of a phrase may be split by spaces or
-/// hyphens in the text.
-fn match_at(text: &[char], i: usize, p: &Pattern) -> Option<(usize, usize)> {
+/// Where a match of `p` starting at `i` ends, and whether it took a trailing plural or
+/// possessive "s" ("Kuhns" -> "Koens"). Only a capitalised match takes one: a misheard name comes
+/// out capitalised, while "marks" must not become "Marcs". Words of a phrase may be split by
+/// spaces, tabs or hyphens in the text, never by a line break.
+fn match_at(text: &[char], i: usize, p: &Pattern) -> Option<(usize, bool)> {
     if i > 0 && is_word_char(text[i - 1]) {
         return None;
     }
@@ -120,7 +121,7 @@ fn match_at(text: &[char], i: usize, p: &Pattern) -> Option<(usize, usize)> {
     for (k, word) in p.words.iter().enumerate() {
         if k > 0 {
             let start = j;
-            while j < text.len() && (text[j].is_whitespace() || text[j] == '-') {
+            while j < text.len() && matches!(text[j], ' ' | '\t' | '-' | '\u{a0}') {
                 j += 1;
             }
             if j == start {
@@ -134,10 +135,10 @@ fn match_at(text: &[char], i: usize, p: &Pattern) -> Option<(usize, usize)> {
     }
     let ends_word = |at: usize| at >= text.len() || !is_word_char(text[at]);
     if ends_word(j) {
-        return Some((j, 0));
+        return Some((j, false));
     }
-    if matches!(text[j], 's' | 'S') && ends_word(j + 1) {
-        return Some((j + 1, 1));
+    if matches!(text[j], 's' | 'S') && ends_word(j + 1) && text[i].is_uppercase() {
+        return Some((j + 1, true));
     }
     None
 }
@@ -158,7 +159,7 @@ pub fn resolve(text: &str, entries: &[Entry]) -> (String, Vec<Fix>) {
         match hit {
             Some((p, (end, suffix))) => {
                 let from: String = chars[i..end].iter().collect();
-                let to = format!("{}{}", p.to, chars[end - suffix..end].iter().collect::<String>());
+                let to = if suffix { format!("{}s", p.to) } else { p.to.clone() };
                 if from != to {
                     fixes.push(Fix { from, to: to.clone() });
                 }
@@ -197,7 +198,7 @@ pub fn stt_prompt(entries: &[Entry]) -> Option<String> {
     (!prompt.is_empty()).then(|| format!("{prompt}."))
 }
 
-fn word_set(s: &str) -> HashSet<String> {
+fn words(s: &str) -> Vec<String> {
     s.split(|c: char| !c.is_alphanumeric())
         .filter(|w| !w.is_empty())
         .map(str::to_lowercase)
@@ -205,12 +206,14 @@ fn word_set(s: &str) -> HashSet<String> {
 }
 
 /// True when the transcriber, given nothing to hear, wrote back the vocabulary hint itself, which
-/// Whisper is known to do on silence. Only a take that repeats the whole list counts, so dictating
-/// a single name from it still works.
-pub fn is_prompt_echo(transcript: &str, prompt: &str) -> bool {
-    let hint = word_set(prompt);
-    let said = word_set(transcript);
-    hint.len() >= 2 && said.is_superset(&hint) && hint.is_superset(&said)
+/// Whisper is known to do on silence: the whole list of two or more entries, in order. With a
+/// single entry an echo cannot be told from dictating that word, so it is never treated as one.
+pub fn is_prompt_echo(transcript: &str, entries: &[Entry]) -> bool {
+    let listed = entries.iter().filter(|e| !e.word.trim().is_empty()).count();
+    match stt_prompt(entries) {
+        Some(prompt) if listed >= 2 => words(transcript) == words(&prompt),
+        _ => false,
+    }
 }
 
 /// The clean-up model's part: the words, how to spell them, and how they tend to be misheard.
@@ -431,8 +434,12 @@ mod tests {
 
     #[test]
     fn possessives_and_plurals_carry_over() {
-        let (out, _) = resolve("all of Kun's work, and Coons updates", &[koen()]);
-        assert_eq!(out, "all of Koen's work, and Koens updates");
+        let (out, _) = resolve("all of Kun's work, and Coons updates, KUHNS", &[koen()]);
+        assert_eq!(out, "all of Koen's work, and Koens updates, Koens");
+        let marc = Entry { word: "Marc".into(), sounds_like: vec!["Mark".into()], fix_case: false };
+        assert_eq!(resolve("he marks it for Mark", &[marc]).0, "he marks it for Marc", "lowercase takes no plural");
+        let it = Entry { word: "IT".into(), sounds_like: vec![], fix_case: true };
+        assert_eq!(resolve("its done, ask it", &[it]).0, "its done, ask IT");
     }
 
     #[test]
@@ -460,6 +467,7 @@ mod tests {
         ];
         assert_eq!(resolve("it is in type-script, tipe", &entries).0, "it is in TypeScript, Type");
         assert_eq!(resolve("Type  Script", &entries).0, "TypeScript");
+        assert_eq!(resolve("a type\nscript", &entries).0, "a type\nscript", "never across lines");
     }
 
     #[test]
@@ -489,9 +497,11 @@ mod tests {
         let prompt = stt_prompt(&entries).unwrap();
         assert_eq!(prompt, "Koen, Kubernetes.");
         assert!(stt_prompt(&[]).is_none());
-        assert!(is_prompt_echo(" Koen, Kubernetes.", &prompt));
-        assert!(!is_prompt_echo("Koen.", &prompt), "a single name is real dictation");
-        assert!(!is_prompt_echo("Ask Koen about Kubernetes.", &prompt));
+        assert!(is_prompt_echo(" Koen, Kubernetes.", &entries));
+        assert!(!is_prompt_echo("Koen.", &entries), "a single name is real dictation");
+        assert!(!is_prompt_echo("Ask Koen about Kubernetes.", &entries));
+        let joe = [Entry { word: "Joe Lloyd".into(), sounds_like: vec![], fix_case: true }];
+        assert!(!is_prompt_echo("Joe Lloyd.", &joe), "one entry can always be dictated");
     }
 
     #[test]

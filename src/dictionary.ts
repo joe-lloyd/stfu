@@ -39,16 +39,35 @@ export function dictionaryEntries(): DictEntry[] {
     .map((r) => ({ word: r.word.trim(), sounds_like: splitHeard(r.heard), fix_case: r.fix_case }));
 }
 
+/** True while the cursor is in one of the rows, which must not be rebuilt under it. */
+function editing(): boolean {
+  return $("dict-list").contains(document.activeElement);
+}
+
 export function applyDictionary(list: DictEntry[] | undefined) {
+  // Settings reloads the config whenever it is shown; the rows already save themselves, so a
+  // reload while typing would only throw away the field in progress.
+  if (editing()) return;
   rows = (list ?? []).map((e) => ({ word: e.word, heard: e.sounds_like.join(", "), fix_case: e.fix_case ?? true }));
   render();
   void preview();
 }
 
+let saveTimer: number | undefined;
+
+/** Saves shortly after typing stops, so nothing typed is lost if the window closes. */
+function saveSoon() {
+  clearTimeout(saveTimer);
+  saveTimer = window.setTimeout(() => void save(), 600);
+}
+
 async function save() {
+  clearTimeout(saveTimer);
   try {
     const saved = await invoke<DictEntry[]>("set_dictionary", { entries: dictionaryEntries() });
     status(`Saved · ${saved.length} word${saved.length === 1 ? "" : "s"}. Used from your next dictation.`, "ok");
+    // Show the tidied list (duplicates dropped, spacing fixed) once nobody is typing in it.
+    if (!editing() && JSON.stringify(saved) !== JSON.stringify(dictionaryEntries())) applyDictionary(saved);
   } catch (e) {
     status(String(e), "err");
   }
@@ -94,6 +113,7 @@ function render() {
     word.value = row.word;
     word.addEventListener("input", () => {
       row.word = word.value;
+      saveSoon();
       void preview();
     });
     word.addEventListener("change", () => void save());
@@ -103,6 +123,7 @@ function render() {
     heard.value = row.heard;
     heard.addEventListener("input", () => {
       row.heard = heard.value;
+      saveSoon();
       void preview();
     });
     heard.addEventListener("change", () => void save());
@@ -124,6 +145,10 @@ function render() {
     find.addEventListener("click", () => {
       if (!row.word.trim()) {
         word.focus();
+        return;
+      }
+      if (/\s/.test(row.word.trim())) {
+        chips.replaceChildren(el("span", "hint", "Find works on single words only."));
         return;
       }
       void suggest(row, chips, heard);

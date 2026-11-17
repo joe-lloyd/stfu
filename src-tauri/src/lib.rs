@@ -941,7 +941,7 @@ async fn process(
         }
     };
     log::info!("stt {:?}: {raw:?}", t0.elapsed());
-    let echo = dictionary::stt_prompt(&cfg.dictionary).is_some_and(|p| dictionary::is_prompt_echo(&raw, &p));
+    let echo = dictionary::is_prompt_echo(&raw, &cfg.dictionary);
     if echo {
         log::info!("transcript is only the dictionary hint read back, treating it as silence");
     }
