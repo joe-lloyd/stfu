@@ -60,6 +60,10 @@ pub async fn transcribe_full(
     if !cfg.stt().language.trim().is_empty() {
         form = form.text("language", cfg.stt().language.trim().to_string());
     }
+    // The dictionary's words as a vocabulary hint. Both server shapes take a `prompt` field.
+    if let Some(prompt) = crate::dictionary::stt_prompt(&cfg.dictionary) {
+        form = form.text("prompt", prompt);
+    }
 
     let resp = client
         .post(&url)

@@ -9,3 +9,4 @@ Open pull requests ready for review. If you opened a draft, run `gh pr ready` on
 - Fix or decline every CodeRabbit finding, then wait for CodeRabbit to review the new head.
 - Once CodeRabbit passes the head clean, and any CI the repo runs is green, merge without asking.
 - If CodeRabbit still has open findings after three rounds of fixes, stop. Do not merge. Tell the owner directly.
+- If CodeRabbit is blocked, do not wait for it: review the diff yourself instead. Blocked means rate-limited, paused, says it skipped the review, or has not finished a review of the current head about 15 minutes after the push. Fix or decline what your review finds, then merge once CI is green. Say in the pull request that CodeRabbit was blocked and the agent did the review.

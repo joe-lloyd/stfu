@@ -84,6 +84,15 @@
       .keys label { display: flex; align-items: center; gap: 6px; margin: 0; padding: 5px 10px; border: 1px solid #34343e; border-radius: 6px; background: #121216; color: #e8e8ec; cursor: pointer; }
       .keys label:has(input:checked) { border-color: #7dd3fc; background: #14232c; }
       .keys input { width: auto; margin: 0; }
+      .dict-row, .dict-head { display: grid; grid-template-columns: 1fr 1.6fr auto auto auto; gap: 6px; align-items: center; margin-bottom: 6px; }
+      .dict-head { color: #9a9aa5; font-size: 11px; margin-bottom: 4px; }
+      .dict-row .toggle { padding: 0 4px; }
+      .dict-row button { padding: 6px 9px; }
+      .dict-row .chips { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+      .dict-row .chips:empty { display: none; }
+      .chip { padding: 2px 8px; border-radius: 10px; font-size: 11px; background: #14232c; border-color: #2d4a5a; }
+      textarea { width: 100%; min-height: 54px; padding: 7px 9px; background: #121216; color: #f0f0f4; border: 1px solid #34343e; border-radius: 6px; font: inherit; resize: vertical; user-select: text; }
+      textarea:focus { outline: none; border-color: #7dd3fc; }
       .apps { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 16px; margin-top: 10px; }
     </style>
   </head>
@@ -94,9 +103,30 @@
 
       <nav class="tabs">
         <button id="tab-btn-setup" class="active">Settings</button>
+        <button id="tab-btn-dictionary">Dictionary</button>
         <button id="tab-btn-history">History</button>
         <button id="tab-btn-meetings">Meetings</button>
       </nav>
+
+      <div id="tab-dictionary" hidden>
+        <section>
+          <h2>Dictionary</h2>
+          <div class="hint">Names and words the transcriber keeps getting wrong, and words that must be written one way. On the left, the word as it should appear; on the right, what it tends to come out as. Listed spellings are always replaced, as whole words, even with clean-up off. The clean-up model is also told about each word, so it catches similar spellings you have not listed yet. <b>Find</b> looks through your dictation history for spellings that sound like the word. <b>Aa</b> also fixes the word's own capitalisation (github → GitHub); untick it for a name that is also an everyday word, like Will. Applies to dictation and meeting transcripts, in every profile.</div>
+          <div class="dict-head" id="dict-head" hidden><span>Write it as</span><span>Sometimes heard as (comma-separated)</span><span></span><span></span><span></span></div>
+          <div id="dict-list"></div>
+          <div class="empty" id="dict-empty" style="padding:14px 0">No words yet.</div>
+          <div class="row">
+            <button class="primary" id="dict-add">Add word</button>
+            <span class="status" id="dict-status" style="margin:0"></span>
+          </div>
+        </section>
+        <section>
+          <h2>Try it</h2>
+          <textarea id="dict-try" placeholder="Type a sentence the way it came out, e.g. Ask Kuhn to review it on github."></textarea>
+          <div class="last-text" id="dict-try-out" style="margin-top:8px; min-height:34px"></div>
+          <div class="hint" id="dict-try-fixes"></div>
+        </section>
+      </div>
 
       <div id="tab-meetings" hidden>
         <section id="mt-unsupported" hidden>

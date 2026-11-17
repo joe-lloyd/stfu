@@ -120,7 +120,11 @@ pub async fn cleanup_traced(
     // an instruction to translate: someone who pins Dutch still dictates the odd English sentence,
     // and "write it in Dutch" makes models translate that. Measured against the live model.
     let language = cfg.stt().language.trim();
-    let system = format!("{SYSTEM_PROMPT}{}", crate::lang::cleanup_hint(language));
+    let system = format!(
+        "{SYSTEM_PROMPT}{}{}",
+        crate::lang::cleanup_hint(language),
+        crate::dictionary::llm_section(&cfg.dictionary)
+    );
     let user = match crate::lang::english_name(language) {
         Some(name) => format!(
             "The speaker usually dictates in {name}. Write \"cleaned\" in the same language as the \

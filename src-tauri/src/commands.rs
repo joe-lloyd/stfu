@@ -1,6 +1,7 @@
 //! Tauri commands used by the settings window.
 
 use crate::config::Config;
+use crate::dictionary::{self, Entry};
 use crate::{audio, history, lang, llm, stt, SharedConfig};
 use tauri::menu::{CheckMenuItem, Submenu};
 use tauri::{Emitter, State, Wry};
@@ -28,12 +29,14 @@ pub fn save_config(
     profile_menu: State<'_, ProfileMenu>,
     mut cfg: Config,
 ) -> Result<(), String> {
-    // The hotkey is owned by `set_hotkey`, which applies it live; a save from a window that
-    // loaded the config earlier must not put an old hotkey back.
+    // The hotkey is owned by `set_hotkey`, which applies it live, and the dictionary by
+    // `set_dictionary`; a save from a window that loaded the config earlier must not put old
+    // values back.
     {
         let live = state.read().unwrap();
         cfg.hotkey = live.hotkey.clone();
         cfg.hotkey_rev = live.hotkey_rev;
+        cfg.dictionary = live.dictionary.clone();
     }
     cfg.save().map_err(|e| format!("{e:#}"))?;
     sync_profile_menu(&profile_menu, &cfg);
@@ -795,4 +798,50 @@ pub fn meeting_set_apps(state: State<'_, SharedConfig>, apps: Vec<String>) -> Re
     cfg.save().map_err(|e| format!("{e:#}"))?;
     log::info!("meeting apps: {:?}", cfg.meeting.apps);
     Ok(())
+}
+
+/// Saves the personal dictionary and returns it tidied up (trimmed, duplicates dropped), so the
+/// Dictionary tab shows exactly what is in use. Applies from the next take on.
+#[tauri::command]
+pub fn set_dictionary(state: State<'_, SharedConfig>, entries: Vec<Entry>) -> Result<Vec<Entry>, String> {
+    let entries = dictionary::normalize(entries);
+    let mut cfg = state.write().unwrap();
+    cfg.dictionary = entries.clone();
+    cfg.save().map_err(|e| format!("{e:#}"))?;
+    log::info!("dictionary saved: {} word(s)", entries.len());
+    Ok(entries)
+}
+
+#[derive(serde::Serialize)]
+pub struct DictionaryPreview {
+    text: String,
+    fixes: Vec<dictionary::Fix>,
+}
+
+/// What the dictionary (as currently typed, saved or not) makes of a sample sentence.
+#[tauri::command]
+pub fn dictionary_preview(entries: Vec<Entry>, text: String) -> DictionaryPreview {
+    let (text, fixes) = dictionary::resolve(&text, &dictionary::normalize(entries));
+    DictionaryPreview { text, fixes }
+}
+
+/// Spellings in the dictation history that sound like `word`, to add as "sounds like" with one
+/// click. Reads raw transcripts only, which the dictionary never changes.
+#[tauri::command]
+pub async fn dictionary_suggest(word: String, known: Vec<String>) -> Result<Vec<dictionary::Suggestion>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = history::dir()?;
+        let mut texts = Vec::new();
+        for day in history::days(&root)? {
+            for rec in history::read_day(&root, &day.day).unwrap_or_default() {
+                if let Some(t) = rec["stt"]["text"].as_str() {
+                    texts.push(t.to_string());
+                }
+            }
+        }
+        Ok::<_, anyhow::Error>(dictionary::suggest(&word, texts.iter().map(String::as_str), &known))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| format!("{e:#}"))
 }
