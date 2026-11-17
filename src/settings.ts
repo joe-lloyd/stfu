@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { applyHistoryConfig, historyOptions, showHistory, type HistoryConfig } from "./history";
 import { meetingOptions, showMeetings, type MeetingConfig } from "./meetings";
+import { applyDictionary, dictionaryEntries, type DictEntry } from "./dictionary";
 
 interface SttConfig { base_url: string; api: string | null; model: string; api_key: string; language: string }
 interface LlmConfig { enabled: boolean; base_url: string; model: string; api_key: string; timeout_secs: number; wire: string | null }
@@ -16,6 +17,7 @@ interface Config {
   history: HistoryConfig;
   clipboard?: ClipboardMode;
   meeting?: MeetingConfig;
+  dictionary?: DictEntry[];
 }
 type ClipboardMode = "when_no_text_field" | "always" | "never";
 interface HotkeyChoices { keys: { name: string; label: string }[]; current: string[]; label: string }
@@ -205,6 +207,8 @@ function collect(): Config {
     clipboard: $<HTMLSelectElement>("clipboard-mode").value as ClipboardMode,
     // Owned by the Meetings tab, which saves it on its own.
     meeting: meetingOptions(cfg.meeting),
+    // Owned by the Dictionary tab, which saves it on its own; sent along so Test uses it.
+    dictionary: dictionaryEntries(),
   };
 }
 
@@ -314,6 +318,7 @@ async function load() {
   await renderHotkey();
   $<HTMLInputElement>("auto-update").checked = cfg.auto_update ?? true;
   applyHistoryConfig(cfg.history);
+  applyDictionary(cfg.dictionary);
   $<HTMLSelectElement>("clipboard-mode").value = cfg.clipboard ?? "when_no_text_field";
   showLast(await invoke<LastDictation | null>("last_dictation"));
   $("app-version").textContent = `version ${await invoke<string>("app_version")}`;
@@ -499,9 +504,9 @@ $("llm-getkey").addEventListener("click", () => invoke("open_url", { url: LLM_PR
 // Save on Cmd/Ctrl+S too.
 window.addEventListener("keydown", (e) => { if ((e.metaKey || e.ctrlKey) && e.key === "s") { e.preventDefault(); save(); } });
 
-type Tab = "setup" | "history" | "meetings";
+type Tab = "setup" | "dictionary" | "history" | "meetings";
 function showTab(tab: Tab) {
-  for (const t of ["setup", "history", "meetings"] as const) {
+  for (const t of ["setup", "dictionary", "history", "meetings"] as const) {
     $(`tab-${t}`).hidden = tab !== t;
     $(`tab-btn-${t}`).classList.toggle("active", tab === t);
   }
@@ -509,6 +514,7 @@ function showTab(tab: Tab) {
   if (tab === "meetings") void showMeetings();
 }
 $("tab-btn-setup").addEventListener("click", () => showTab("setup"));
+$("tab-btn-dictionary").addEventListener("click", () => showTab("dictionary"));
 $("tab-btn-history").addEventListener("click", () => showTab("history"));
 $("tab-btn-meetings").addEventListener("click", () => showTab("meetings"));
 // The tray opens the Meetings tab when a meeting cannot start yet.

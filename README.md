@@ -166,6 +166,16 @@ Default hotkey is Ctrl+Win (`["ControlLeft", "MetaLeft"]`). There are no permiss
 - **The tray icon is hidden by default.** Click the `^` arrow next to the clock and drag the waveform icon onto the taskbar.
 - **Microphone privacy.** If nothing is recorded, allow desktop apps to use the microphone under Settings > Privacy & security > Microphone. Settings shows a Microphone row that goes red when the device cannot be opened. The keyboard hook cannot see elevated (admin) windows, so dictation into an admin PowerShell will not work unless stfu also runs elevated.
 
+## Dictionary
+
+Settings › Dictionary holds the names and words the transcriber keeps getting wrong, and words that must be written one way. Each entry is the word as it should appear ("Koen") plus the spellings it tends to come out as ("Kuhn, Koon, Cohen"). An entry is used three ways:
+
+1. **Vocabulary hint.** The words go to the transcriber as Whisper's `prompt`. On real recordings this got a colleague's name right in 3 of 10 takes that had all come out wrong before; the rest came out as other spellings, so the next two steps do most of the work.
+2. **Replacement.** Every listed spelling is replaced as a whole word, in any capitalisation, keeping a plural or possessive ("Kun's" becomes "Koen's"). This runs on this machine, so it also works with clean-up off, when clean-up fails, and offline. With **Aa** ticked, the word's own capitalisation is fixed too (`github` becomes `GitHub`); untick it for a name that is also an everyday word, like Will.
+3. **Clean-up.** The clean-up model is told each word and its known mishearings, so it also catches spellings that are not listed yet ("Cun", "Cone" and "Cooen" all became "Koen" in testing), while a lowercase "ice cream cone" stays as it is. Its reply gets the same replacement pass.
+
+**Find** looks through your dictation history for capitalised words in the middle of a sentence that sound like the entry, ranked by how often they appear, and adds one with a click. **Try it** shows what the dictionary makes of a sentence before you dictate it. The dictionary also applies to meeting transcripts, is shared by every profile, and is stored as `dictionary` in the config file. Each history record lists the replacements made in that take.
+
 ## History
 
 Every dictation is written to a local file, one per day, so nothing is ever lost and you can see what each stage did:
@@ -236,7 +246,7 @@ The log is at `~/Library/Application Support/stfu/stfu.log` on macOS and `%APPDA
 ## Known limitations (MVP)
 
 - API keys live in a plain JSON file or env vars, not the OS keychain.
-- Settings covers providers and keys only. No dictionary, snippets, history or per-app styles yet. All in `SPEC.md`.
+- No snippets or per-app styles yet, and the dictionary does not learn from your corrections by itself. All in `SPEC.md`.
 - Paste goes through the clipboard; apps that block paste (some password fields, some terminals) will not receive text.
 - OpenCode Zen free models are promotional and may be withdrawn; switch `llm.model` if one stops responding. Some Zen models are served on `/responses` or `/messages` instead of `/chat/completions`; pick a model listed under chat completions.
 - Unsigned builds: Gatekeeper and SmartScreen will warn on first launch.

@@ -18,6 +18,7 @@ interface Rec {
     prompt?: string; reply?: string; cleaned?: string; error?: string; fell_back?: boolean;
   };
   output?: { text?: string; pasted?: boolean; paste_ms?: number; paste_error?: string; focus?: string; on_clipboard?: boolean };
+  dictionary?: { from: string; to: string }[];
   total_ms?: number;
 }
 interface Day { day: string; count: number }
@@ -188,6 +189,9 @@ function card(r: Rec): HTMLElement {
       if (r.llm.cleaned) stage(details, "3 · Cleaned", [], r.llm.cleaned);
     } else if (r.llm) {
       stage(details, "3 · Clean-up", [["status", "off for this profile"]]);
+    }
+    if (r.dictionary?.length) {
+      stage(details, "Dictionary", [], r.dictionary.map((f) => `${f.from} → ${f.to}`).join("\n"));
     }
     stage(
       details,

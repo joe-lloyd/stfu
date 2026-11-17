@@ -40,6 +40,9 @@ pub struct Record {
     pub stt: Stt,
     pub llm: Llm,
     pub output: Output,
+    /// Replacements the personal dictionary made, on the transcript and on the cleaned text.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dictionary: Vec<crate::dictionary::Fix>,
     pub total_ms: u64,
 }
 

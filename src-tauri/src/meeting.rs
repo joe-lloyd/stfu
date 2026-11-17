@@ -199,7 +199,12 @@ impl Drop for Active {
 
 /// Starts transcribing. Returns once the model is loaded and both sides are being captured, with
 /// the path of the transcript file. If the meeting fails after that, `on_failure` gets the error.
-pub fn start(apps: Vec<String>, on_failure: impl FnOnce(anyhow::Error) + Send + 'static) -> Result<PathBuf> {
+/// `dictionary` fixes known mishearings in every line, as it does for dictation.
+pub fn start(
+    apps: Vec<String>,
+    dictionary: Vec<crate::dictionary::Entry>,
+    on_failure: impl FnOnce(anyhow::Error) + Send + 'static,
+) -> Result<PathBuf> {
     if !syscap::supported() {
         bail!("meeting transcripts need macOS 13 or newer");
     }
@@ -221,7 +226,7 @@ pub fn start(apps: Vec<String>, on_failure: impl FnOnce(anyhow::Error) + Send + 
         .name("meeting".into())
         .spawn(move || {
             let mut ready = Some(ready_tx);
-            match run(&model, apps, &thread_path, started, ctl_rx, &mut ready) {
+            match run(&model, apps, &dictionary, &thread_path, started, ctl_rx, &mut ready) {
                 Ok(reply) => {
                     // Over before `stop` hears back, so it can start the next one straight away.
                     drop(active);
@@ -264,6 +269,7 @@ struct Track {
 fn run(
     model_path: &Path,
     apps: Vec<String>,
+    dictionary: &[crate::dictionary::Entry],
     path: &Path,
     started: chrono::DateTime<chrono::Local>,
     ctl: mpsc::Receiver<Ctl>,
@@ -305,7 +311,7 @@ fn run(
         you.pending.extend(audio::to_mono_16k(&raw, mic_rate, mic_channels));
         them.pending.append(&mut others.lock().unwrap());
         for track in [&mut you, &mut them] {
-            transcribe_pending(&mut session, track, last, &mut out)?;
+            transcribe_pending(&mut session, track, last, dictionary, &mut out)?;
         }
         if let Some(reply) = reply {
             out.finish()?;
@@ -327,6 +333,7 @@ fn transcribe_pending(
     session: &mut transcribe_cpp::Session,
     track: &mut Track,
     flush: bool,
+    dictionary: &[crate::dictionary::Entry],
     out: &mut Transcript,
 ) -> Result<()> {
     while let Some(chunk) = take_chunk(&mut track.pending, flush) {
@@ -336,7 +343,10 @@ fn transcribe_pending(
             continue;
         }
         match session.run(&chunk, &transcribe_cpp::RunOptions::default()) {
-            Ok(t) if !t.text.trim().is_empty() => out.line(at, track.label, t.text.trim())?,
+            Ok(t) if !t.text.trim().is_empty() => {
+                let (text, _) = crate::dictionary::resolve(t.text.trim(), dictionary);
+                out.line(at, track.label, &text)?
+            }
             Ok(_) => {}
             Err(e) => log::warn!("meeting: transcribing a chunk failed: {e}"),
         }
@@ -514,7 +524,7 @@ mod tests {
         let mut out = Transcript::create(&path, chrono::Local::now()).unwrap();
         let mut track = Track { label: "Others", pending: samples, consumed: 0 };
         let t = std::time::Instant::now();
-        transcribe_pending(&mut session, &mut track, true, &mut out).unwrap();
+        transcribe_pending(&mut session, &mut track, true, &[], &mut out).unwrap();
         out.finish().unwrap();
         let elapsed = t.elapsed().as_secs_f32();
         let text = std::fs::read_to_string(&path).unwrap();
@@ -531,7 +541,7 @@ mod tests {
     fn live_meeting() {
         let apps = std::env::var("STFU_MEETING_APPS").expect("set STFU_MEETING_APPS");
         let seconds: u64 = std::env::var("STFU_MEETING_SECONDS").map_or(45, |s| s.parse().unwrap());
-        let path = start(apps.split(',').map(String::from).collect(), |e| panic!("{e:#}")).unwrap();
+        let path = start(apps.split(',').map(String::from).collect(), Vec::new(), |e| panic!("{e:#}")).unwrap();
         assert!(running());
         std::thread::sleep(Duration::from_secs(seconds));
         assert_eq!(stop().unwrap(), path);

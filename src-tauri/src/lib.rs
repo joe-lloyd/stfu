@@ -1,6 +1,7 @@
 mod audio;
 mod commands;
 mod config;
+mod dictionary;
 mod flac;
 mod focus;
 mod history;
@@ -119,7 +120,11 @@ fn toggle_meeting(app: &AppHandle, item: &tauri::menu::MenuItem<tauri::Wry>) {
         let _ = app.emit_to(SETTINGS, "show-tab", "meetings");
         return;
     }
-    let apps = app.state::<SharedConfig>().read().unwrap().meeting.apps.clone();
+    let (apps, dictionary) = {
+        let state = app.state::<SharedConfig>();
+        let cfg = state.read().unwrap();
+        (cfg.meeting.apps.clone(), cfg.dictionary.clone())
+    };
     let _ = item.set_enabled(false);
     std::thread::spawn(move || {
         // A meeting that dies part-way (disk full, say) must not leave the tray saying it runs.
@@ -128,7 +133,7 @@ fn toggle_meeting(app: &AppHandle, item: &tauri::menu::MenuItem<tauri::Wry>) {
             let _ = failed_item.set_text(START_MEETING);
             finish(&failed_app, claim_pill(&failed_app), Err(e));
         };
-        let result = meeting::start(apps, on_failure);
+        let result = meeting::start(apps, dictionary, on_failure);
         let _ = item.set_enabled(true);
         if result.is_ok() {
             let _ = item.set_text("Stop meeting transcript");
@@ -490,6 +495,9 @@ pub fn run() {
             commands::meeting_set_apps,
             commands::hotkey_choices,
             commands::set_hotkey,
+            commands::set_dictionary,
+            commands::dictionary_preview,
+            commands::dictionary_suggest,
             commands::pill_report,
         ])
         .on_window_event(|window, event| {
@@ -933,11 +941,19 @@ async fn process(
         }
     };
     log::info!("stt {:?}: {raw:?}", t0.elapsed());
-    if !raw.chars().any(|c| c.is_alphanumeric()) {
+    let echo = dictionary::stt_prompt(&cfg.dictionary).is_some_and(|p| dictionary::is_prompt_echo(&raw, &p));
+    if echo {
+        log::info!("transcript is only the dictionary hint read back, treating it as silence");
+    }
+    if echo || !raw.chars().any(|c| c.is_alphanumeric()) {
         log::info!("no speech in transcript, skipping");
         rec.outcome = "no_speech".into();
         return Ok(None);
     }
+    // Fix known mishearings before clean-up, so the model reads the right names; and again
+    // after, in case it wrote one back.
+    let (raw, fixes) = dictionary::resolve(&raw, &cfg.dictionary);
+    rec.dictionary.extend(fixes);
 
     rec.llm.enabled = cfg.llm().enabled;
     rec.llm.base_url = cfg.llm().base_url.clone();
@@ -967,6 +983,12 @@ async fn process(
     } else {
         raw.clone()
     };
+    let (text, fixes) = dictionary::resolve(&text, &cfg.dictionary);
+    rec.dictionary.extend(fixes);
+    if !rec.dictionary.is_empty() {
+        let pairs: Vec<String> = rec.dictionary.iter().map(|f| format!("{} -> {}", f.from, f.to)).collect();
+        log::info!("dictionary: {}", pairs.join(", "));
+    }
     rec.output.text = text.clone();
 
     if !text.chars().any(|c| c.is_alphanumeric()) {

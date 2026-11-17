@@ -93,6 +93,10 @@ pub struct Config {
     /// Meeting transcripts (see meeting.rs).
     #[serde(default)]
     pub meeting: MeetingConfig,
+    /// Words to spell a particular way, and how the transcriber mishears them (see
+    /// dictionary.rs). Shared by every profile.
+    #[serde(default)]
+    pub dictionary: Vec<crate::dictionary::Entry>,
 }
 
 /// Apps whose sound a meeting transcript hears, by bundle id: call apps and browsers. Anything
@@ -287,6 +291,7 @@ impl Default for Config {
             history: HistoryConfig::default(),
             clipboard: ClipboardMode::default(),
             meeting: MeetingConfig::default(),
+            dictionary: Vec::new(),
         }
     }
 }
