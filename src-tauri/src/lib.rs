@@ -4,6 +4,7 @@ mod config;
 mod dictionary;
 mod flac;
 mod focus;
+mod hallucination;
 mod history;
 mod hotkey;
 mod inject;
@@ -802,8 +803,8 @@ fn pipeline_loop(
                         set_take_state(&app, take_no, "recording", None);
                         let app2 = app.clone();
                         std::thread::spawn(move || {
-                            while let Ok(level) = levels.recv() {
-                                let _ = app2.emit_to(PILL, "level", level);
+                            while let Ok(batch) = levels.recv() {
+                                let _ = app2.emit_to(PILL, "level", batch);
                             }
                         });
                     }
@@ -927,6 +928,8 @@ async fn process(
     rec.stt.base_url = cfg.stt().base_url.clone();
     rec.stt.api = cfg.stt().api.clone();
     rec.stt.model = cfg.stt().model.clone();
+    // Kept to check the audio if the transcript is one of Whisper's answers to silence.
+    let heard = wav.clone();
     let transcribed = stt::transcribe_full(client, cfg, wav).await;
     rec.stt.duration_ms = t0.elapsed().as_millis() as u64;
     let raw = match transcribed {
@@ -945,7 +948,11 @@ async fn process(
     if echo {
         log::info!("transcript is only the dictionary hint read back, treating it as silence");
     }
-    if echo || !raw.chars().any(|c| c.is_alphanumeric()) {
+    let stock = !echo && hallucination::heard_nothing(&raw, &heard);
+    if stock {
+        log::info!("transcript is Whisper's stock answer to silence and nobody spoke, treating it as silence");
+    }
+    if echo || stock || !raw.chars().any(|c| c.is_alphanumeric()) {
         log::info!("no speech in transcript, skipping");
         rec.outcome = "no_speech".into();
         return Ok(None);
