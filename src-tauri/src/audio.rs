@@ -5,12 +5,16 @@ use anyhow::{anyhow, Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
-
 pub const TARGET_RATE: u32 = 16_000;
 
+/// Levels per second of audio, one bar each on the pill (main.ts `LEVEL_MS` must match).
+const LEVELS_PER_SECOND: u32 = 30;
+/// Levels per message to the pill. Each message wakes the pill's page and redraws it; pairs halve
+/// that work, and the pill's scroll runs far enough behind the newest level to hide the wait.
+const LEVELS_PER_MESSAGE: usize = 2;
+
 enum Cmd {
-    Start(Sender<f32>),
+    Start(Sender<Vec<f32>>),
     Stop(Sender<Result<Vec<u8>>>),
 }
 
@@ -29,8 +33,9 @@ impl Recorder {
         Self { tx }
     }
 
-    /// Starts capturing. Peak levels (0..1) are sent on the returned receiver ~30x per second.
-    pub fn start(&self) -> Result<Receiver<f32>> {
+    /// Starts capturing. Peak levels (0..1), one per 1/30 s of audio, arrive on the returned
+    /// receiver in pairs, oldest first.
+    pub fn start(&self) -> Result<Receiver<Vec<f32>>> {
         let (ltx, lrx) = mpsc::channel();
         self.tx.send(Cmd::Start(ltx)).map_err(|_| anyhow!("audio thread gone"))?;
         Ok(lrx)
@@ -76,20 +81,32 @@ fn audio_thread(rx: Receiver<Cmd>) {
     }
 }
 
-fn start_stream(level_tx: Sender<f32>) -> Result<Active> {
+fn start_stream(level_tx: Sender<Vec<f32>>) -> Result<Active> {
     let samples = Arc::new(Mutex::new(Vec::<f32>::with_capacity(48_000 * 30)));
     let sink = samples.clone();
-    let mut last_emit = Instant::now();
-    let mut peak = 0f32;
-    let (stream, rate, channels) =
-        open_input(move |data| push(&sink, data, &mut peak, &mut last_emit, &level_tx))?;
+    let (stream, rate, channels) = open_input_with(move |rate, channels| {
+        let mut levels = Levels::new(rate, channels);
+        move |data: &[f32]| {
+            sink.lock().unwrap().extend_from_slice(data);
+            for batch in levels.feed(data) {
+                let _ = level_tx.send(batch);
+            }
+        }
+    })?;
     Ok(Active { _stream: stream, samples, rate, channels })
 }
 
 /// Opens the default microphone and calls `on_data` with its samples as f32, interleaved at the
 /// device's own rate and channel count, which are returned alongside the running stream.
 pub fn open_input(
-    mut on_data: impl FnMut(&[f32]) + Send + 'static,
+    on_data: impl FnMut(&[f32]) + Send + 'static,
+) -> Result<(cpal::Stream, u32, u16)> {
+    open_input_with(move |_, _| on_data)
+}
+
+/// Like `open_input`, but builds the callback once the device's rate and channel count are known.
+fn open_input_with<F: FnMut(&[f32]) + Send + 'static>(
+    make: impl FnOnce(u32, u16) -> F,
 ) -> Result<(cpal::Stream, u32, u16)> {
     let host = cpal::default_host();
     let device = host
@@ -107,6 +124,7 @@ pub fn open_input(
     );
     let rate = config.sample_rate();
     let channels = config.channels();
+    let mut on_data = make(rate, channels);
 
     let err_fn = |e| log::error!("audio stream error: {e}");
     let stream_config: cpal::StreamConfig = config.clone().into();
@@ -144,22 +162,39 @@ pub fn open_input(
     Ok((stream, rate, channels))
 }
 
-fn push(
-    sink: &Arc<Mutex<Vec<f32>>>,
-    data: &[f32],
-    peak: &mut f32,
-    last_emit: &mut Instant,
-    level_tx: &Sender<f32>,
-) {
-    let mut buf = sink.lock().unwrap();
-    for &s in data {
-        *peak = peak.max(s.abs());
-        buf.push(s);
+/// Turns the microphone's samples into the pill's levels: the peak of each 1/30 s of audio, by
+/// sample count rather than wall clock, so the pill gets an even 30 a second however the device
+/// sizes its buffers.
+struct Levels {
+    /// Interleaved samples per level.
+    window: usize,
+    left: usize,
+    peak: f32,
+    pending: Vec<f32>,
+}
+
+impl Levels {
+    fn new(rate: u32, channels: u16) -> Self {
+        let window = ((rate / LEVELS_PER_SECOND) as usize * channels.max(1) as usize).max(1);
+        Self { window, left: window, peak: 0.0, pending: Vec::with_capacity(LEVELS_PER_MESSAGE) }
     }
-    if last_emit.elapsed() >= Duration::from_millis(33) {
-        let _ = level_tx.send(*peak);
-        *peak = 0.0;
-        *last_emit = Instant::now();
+
+    /// Takes the next samples and returns the batches of levels that are now complete.
+    fn feed(&mut self, data: &[f32]) -> Vec<Vec<f32>> {
+        let mut out = Vec::new();
+        for &s in data {
+            self.peak = self.peak.max(s.abs());
+            self.left -= 1;
+            if self.left == 0 {
+                self.pending.push(self.peak);
+                self.peak = 0.0;
+                self.left = self.window;
+                if self.pending.len() == LEVELS_PER_MESSAGE {
+                    out.push(std::mem::replace(&mut self.pending, Vec::with_capacity(LEVELS_PER_MESSAGE)));
+                }
+            }
+        }
+        out
     }
 }
 
@@ -229,4 +264,23 @@ fn encode_wav(samples: &[f32], rate: u32, channels: u16) -> Result<Vec<u8>> {
         w.finalize()?;
     }
     Ok(cursor.into_inner())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn levels_come_thirty_a_second_in_pairs_however_buffers_are_sized() {
+        // One second of 48 kHz stereo in odd-sized device buffers.
+        let mut levels = Levels::new(48_000, 2);
+        let audio: Vec<f32> = (0..96_000).map(|i| if i / 3200 == 7 { 0.5 } else { 0.01 }).collect();
+        let batches: Vec<Vec<f32>> = audio.chunks(941).flat_map(|c| levels.feed(c)).collect();
+        assert_eq!(batches.len(), 15);
+        assert!(batches.iter().all(|b| b.len() == 2));
+        let flat: Vec<f32> = batches.concat();
+        // Each level is the peak of its own 1/30 s: only the eighth one saw the loud stretch.
+        assert_eq!(flat[7], 0.5);
+        assert!(flat.iter().enumerate().all(|(i, l)| i == 7 || *l == 0.01));
+    }
 }

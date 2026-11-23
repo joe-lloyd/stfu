@@ -660,6 +660,7 @@ pub fn set_hotkey(
 #[derive(Debug, serde::Deserialize)]
 pub struct PillReport {
     ms: f64,
+    /// Redraws with new levels (about 15 a second: the scroll itself runs on the compositor).
     frames: u32,
     levels: u32,
     peak: f32,
@@ -673,7 +674,7 @@ pub struct PillReport {
 pub fn pill_report(report: PillReport) {
     let fps = if report.ms > 0.0 { report.frames as f64 * 1000.0 / report.ms } else { 0.0 };
     log::info!(
-        "pill: {:.0} ms recording, {} frames ({fps:.0} fps), {} level events, peak {:.2}, tallest bar {:.0}px, page {}",
+        "pill: {:.0} ms recording, {} redraws ({fps:.0}/s), {} levels, peak {:.2}, tallest bar {:.0}px, page {}",
         report.ms,
         report.frames,
         report.levels,
