@@ -223,6 +223,7 @@ macOS 13 or newer. Choose **Start meeting transcript** in the menu bar when a ca
 ## Behaviour details
 
 - Taps shorter than 300 ms are ignored.
+- Holding the hotkey without speaking pastes nothing. Whisper answers silence with a stock phrase, almost always "Thank you.", so a transcript that is only such a phrase is dropped when the audio has no voice in it (too quiet, or none of a voice's steady pitch). Any other transcript is never touched.
 - The clipboard is restored to its previous text ~250 ms after pasting, unless no text field has focus: then the dictation stays on the clipboard so it is not lost, and the pill says "Copied to clipboard". Settings > "Leave the dictation on the clipboard" also offers Always and Never. macOS only; the check uses Accessibility. Chrome and Electron apps (Slack, VS Code, Teams, ...) do not report their focused element, so there the old clipboard comes back as before.
 - The last dictation is always one click away: **Copy last dictation** in the menu bar, or the Last dictation card at the top of Settings.
 - If the LLM call fails or times out, the raw transcript is pasted so you never lose a dictation.
