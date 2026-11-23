@@ -26,10 +26,17 @@ const PHRASES: &[&str] = &[
     "bedankt voor het kijken",
     "bedankt",
     "dank je wel",
+    // Whisper's subtitle credits, whole: a sentence that only mentions the site is dictation.
+    "subtitles by the amara org community",
+    "ondertiteling door de amara org gemeenschap",
+    "ondertiteld door de amara org gemeenschap",
+    "ondertitels ingediend door de amara org gemeenschap",
+    "untertitel der amara org community",
+    "untertitel im auftrag des zdf für funk 2017",
+    "sous titres réalisés par la communauté d amara org",
+    "sottotitoli creati dalla comunità amara org",
+    "subtítulos realizados por la comunidad de amara org",
 ];
-
-/// Whisper's subtitle credit, in any language ("Subtitles by the Amara.org community").
-const CREDIT: &str = "amara org";
 
 /// The loudest 30 ms of a take with speech in it is louder than this (RMS, full scale 1.0).
 const QUIET: f32 = 0.012;
@@ -45,8 +52,6 @@ const LAGS: std::ops::RangeInclusive<usize> = 40..=267;
 const FLOOR: f32 = 0.0015;
 /// How closely a frame must repeat itself one pitch period later to count as voiced (0..1).
 const VOICED: f32 = 0.75;
-/// Only the start of a long take is analysed; speech anywhere in it shows up well before this.
-const MAX_SECONDS: usize = 30;
 
 /// True when `transcript` is Whisper's answer to silence and the take's audio (a 16 kHz mono WAV)
 /// has no voice in it.
@@ -68,7 +73,7 @@ pub fn heard_nothing(transcript: &str, wav: &[u8]) -> bool {
 
 fn is_stock_phrase(transcript: &str) -> bool {
     let text = normalise(transcript);
-    PHRASES.contains(&text.as_str()) || text.contains(CREDIT)
+    PHRASES.contains(&text.as_str())
 }
 
 /// Lowercase words separated by single spaces; punctuation and case dropped.
@@ -89,7 +94,6 @@ fn read_wav(wav: &[u8]) -> Option<Vec<f32>> {
     }
     let samples: Result<Vec<f32>, _> = reader
         .into_samples::<i16>()
-        .take(RATE * MAX_SECONDS)
         .map(|s| s.map(|s| s as f32 / i16::MAX as f32))
         .collect();
     samples.ok()
@@ -105,6 +109,8 @@ struct Voice {
 }
 
 impl Voice {
+    /// Reads the whole take, stopping as soon as it is clearly a voice, so a long take with speech
+    /// costs little and a long silent one is mostly skipped below `FLOOR`.
     fn of(samples: &[f32]) -> Self {
         let mut voice = Voice::default();
         let mut frame = [0f32; FRAME];
@@ -117,6 +123,9 @@ impl Voice {
             voice.loudest = voice.loudest.max(rms);
             if rms >= FLOOR && periodicity(&frame) >= VOICED {
                 voice.voiced += 1;
+            }
+            if voice.loudest >= QUIET && voice.voiced >= MIN_VOICED {
+                break;
             }
         }
         voice
@@ -191,7 +200,8 @@ mod tests {
                   "Subtitles by the Amara.org community", "Bedankt voor het kijken."] {
             assert!(is_stock_phrase(t), "{t}");
         }
-        for t in ["Thank you for the review.", "I thank you.", "Yes.", "Wait.", "Can you?", ""] {
+        for t in ["Thank you for the review.", "I thank you.", "Yes.", "Wait.", "Can you?", "",
+                  "Please open Amara.org and review the subtitles."] {
             assert!(!is_stock_phrase(t), "{t}");
         }
     }
@@ -226,6 +236,13 @@ mod tests {
     }
 
     #[test]
+    fn speech_after_a_long_silence_is_still_heard() {
+        let mut s = noise(40 * RATE, 0.002);
+        s.extend(vowel(0.5, 0.05));
+        assert!(!heard_nothing("Thank you.", &wav(&s)));
+    }
+
+    #[test]
     fn an_unreadable_wav_is_left_alone() {
         assert!(!heard_nothing("Thank you.", b"not a wav"));
     }
@@ -233,7 +250,7 @@ mod tests {
     #[test]
     fn a_voice_is_periodic_and_noise_is_not() {
         let v = Voice::of(&vowel(0.5, 0.05));
-        assert!(v.voiced >= 10, "{v:?}");
+        assert!(v.voiced >= MIN_VOICED, "{v:?}");
         assert!(v.loudest > QUIET, "{v:?}");
         let n = Voice::of(&noise(RATE / 2, 0.05));
         assert!(n.voiced < MIN_VOICED, "{n:?}");

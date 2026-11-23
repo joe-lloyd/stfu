@@ -112,12 +112,15 @@ function push(level: number) {
   if (edge >= origin + SPAN - BARS) startScroll(edge);
   // A slot is out of sight until the edge reaches it. A level that arrives after its slot came
   // into view (a late delivery) goes further right instead, so no bar ever pops up inside the
-  // wave; the slots it skips repeat it. Levels far ahead of the scroll (its clock was paused
-  // while the window was hidden) move the scroll on to them.
-  if (count < Math.ceil(edge + 1)) {
+  // wave. Levels far ahead of the scroll (its clock was paused while the window was hidden) move
+  // the scroll on to them.
+  const hidden = Math.ceil(edge + 1);
+  if (count < hidden) {
+    // Slots already on screen get dots like the rest of the flat line; only the out-of-sight
+    // ones get this level, which then scrolls in.
     const to = Math.ceil(edge + 1 + LAG);
     count = Math.max(count, to - RING);
-    while (count < to) place(count++, height);
+    for (; count < to; count++) place(count, count < hidden ? 0 : height);
   } else {
     if (count > edge + 1 + LAG + 6) startScroll(count - 1 - LAG);
     place(count++, height);
