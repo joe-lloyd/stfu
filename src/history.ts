@@ -14,7 +14,7 @@ interface Rec {
   audio?: { file?: string; held_ms?: number; duration_ms?: number; bytes?: number };
   stt?: { base_url?: string; api?: string; model?: string; duration_ms?: number; text?: string; response?: unknown; error?: string };
   llm?: {
-    enabled?: boolean; base_url?: string; model?: string; wire?: string; duration_ms?: number;
+    enabled?: boolean; base_url?: string; model?: string; wire?: string; style?: string; duration_ms?: number;
     prompt?: string; reply?: string; cleaned?: string; error?: string; fell_back?: boolean;
   };
   output?: { text?: string; pasted?: boolean; paste_ms?: number; paste_error?: string; focus?: string; on_clipboard?: boolean };
@@ -123,6 +123,7 @@ function card(r: Rec): HTMLElement {
   meta.append(el("span", "time", isNaN(time.getTime()) ? r.ts : time.toLocaleTimeString()), outcomeBadge(r));
   if (r.target_app?.name) meta.append(el("span", "", `→ ${r.target_app.name}`));
   if (r.output?.on_clipboard) meta.append(el("span", "badge", "on clipboard"));
+  if (r.llm?.style === "stfu") meta.append(el("span", "badge stfu", "STFU"));
   if (r.profile) meta.append(el("span", "", r.profile));
   const timing = [
     r.audio?.duration_ms !== undefined ? `${secs(r.audio.duration_ms)} audio` : "",
@@ -179,6 +180,7 @@ function card(r: Rec): HTMLElement {
     if (r.llm?.enabled) {
       stage(details, "3 · Clean-up", [
         ["model", [r.llm.model, r.llm.wire].filter(Boolean).join(" · ")],
+        ["style", r.llm.style === "stfu" ? "STFU (condensed)" : r.llm.style === "clean" ? "clean-up" : undefined],
         ["server", r.llm.base_url],
         ["took", secs(r.llm.duration_ms)],
         ["error", r.llm.error],

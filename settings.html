@@ -56,6 +56,7 @@
       .badge.pasted { background: #173d2a; color: #3ddc84; }
       .badge.failed { background: #3d1c1c; color: #ff8f8f; }
       .badge.warn { background: #3d331a; color: #ffd166; }
+      .badge.stfu { background: #2e1f45; color: #c9a2ff; }
       .entry .text { margin: 8px 0 6px; white-space: pre-wrap; word-break: break-word; user-select: text; }
       .entry .text.muted { color: #7f7f8a; font-style: italic; }
       .entry .actions { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -252,6 +253,15 @@
           <span class="status" id="hotkey-status" style="margin:0"></span>
         </div>
         <div class="hint">Hold every ticked key together to dictate, and let go to stop. The new keys work straight away. On a Mac, Fn on its own is also the system's dictation and emoji key; if it still opens those, set System Settings › Keyboard › "Press fn key to" to Do Nothing.</div>
+      </section>
+
+      <section id="stfu-section">
+        <h2>STFU mode</h2>
+        <label class="toggle"><input type="checkbox" id="stfu-on" /> Condense every take: keep every point, cut every wasted word</label>
+        <label for="stfu-key">Switch one take</label>
+        <select id="stfu-key"></select>
+        <span class="status" id="stfu-status"></span>
+        <div class="hint">Ramble as long as you like; what gets pasted is just the point, in your own words, with several points as a bullet list. Press the switch key while you hold the hotkey to flip that one take (the wave turns purple for STFU); press it again to flip back. Takes under about 20 words are only cleaned up, because there is nothing to cut. Also in the menu bar as <b>STFU mode</b>. It needs the clean-up model below.</div>
       </section>
 
       <section id="profile-bar">

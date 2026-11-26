@@ -40,6 +40,7 @@ const bars: HTMLElement[] = [];
 for (let i = 0; i < RING; i++) bars.push(strip.appendChild(document.createElement("i")));
 
 let phase: Phase = "idle";
+let stfu = false;     // this take is condensed (STFU mode); set before "recording" and on each switch
 let pitch = 0;        // px from one bar to the next
 let count = 0;        // next slot to fill; slots are numbered from the start of the take
 let origin = 0;       // the slot at the wave's right edge when the scroll animation started
@@ -170,6 +171,7 @@ function parkBars() {
 function showMessage(p: Phase, message?: string) {
   const note = p === "done" && !!message;
   pill.className = note ? `${p} note` : p;
+  pill.classList.toggle("stfu", stfu);
   msg.textContent = p === "error" ? (message ?? "Something went wrong") : note ? message! : "";
 }
 
@@ -196,6 +198,12 @@ listen<number[]>("level", (e) => {
   }
 });
 
+// "stfu" or "clean": sent as a take starts and each time the switch key flips it.
+listen<string>("style", (e) => {
+  stfu = e.payload === "stfu";
+  pill.classList.toggle("stfu", stfu);
+});
+
 // Sent when the hotkey is released, also for takes dropped as too short or silent.
 listen("recording-ended", () => sendReport());
 
@@ -210,10 +218,11 @@ listen<StateEvent>("state", (e) => {
 });
 
 // Design/debug aid: drive the pill from the browser console or a preview without Tauri.
-// window.__stfuDemo("recording" | "processing" | "done" | "error", message?)
+// window.__stfuDemo("recording" | "processing" | "done" | "error", message?, stfu?)
 let demoTimer: number | undefined;
-(window as unknown as { __stfuDemo: (p: Phase, m?: string) => void }).__stfuDemo = (p, m) => {
+(window as unknown as { __stfuDemo: (p: Phase, m?: string, s?: boolean) => void }).__stfuDemo = (p, m, s) => {
   if (demoTimer) { clearInterval(demoTimer); demoTimer = undefined; }
+  stfu = !!s;
   enter(p, m);
   if (p === "recording") {
     demoTimer = window.setInterval(() => push(Math.random() * 0.15), LEVEL_MS);

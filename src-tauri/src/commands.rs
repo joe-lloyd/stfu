@@ -7,6 +7,9 @@ use tauri::menu::{CheckMenuItem, Submenu};
 use tauri::{Emitter, State, Wry};
 
 /// The tray's language submenu, so a change made in Settings updates the menu too.
+/// The tray's "STFU mode" tick, kept in step when Settings changes it.
+pub struct StfuMenu(pub CheckMenuItem<Wry>);
+
 pub struct LangMenu {
     pub items: Vec<CheckMenuItem<Wry>>,
     pub submenu: Submenu<Wry>,
@@ -29,23 +32,25 @@ pub fn save_config(
     profile_menu: State<'_, ProfileMenu>,
     mut cfg: Config,
 ) -> Result<(), String> {
-    // The hotkey is owned by `set_hotkey`, which applies it live, and the dictionary by
-    // `set_dictionary`; a save from a window that loaded the config earlier must not put old
-    // values back.
+    // The hotkey is owned by `set_hotkey`, which applies it live, the dictionary by
+    // `set_dictionary` and STFU mode by `set_stfu`; a save from a window that loaded the config
+    // earlier must not put old values back. Read and written under one lock, so a tray change
+    // in between is not lost. The menus are updated after the lock is released.
     {
-        let live = state.read().unwrap();
+        let mut live = state.write().unwrap();
         cfg.hotkey = live.hotkey.clone();
         cfg.hotkey_rev = live.hotkey_rev;
         cfg.dictionary = live.dictionary.clone();
+        cfg.stfu = live.stfu.clone();
+        cfg.save().map_err(|e| format!("{e:#}"))?;
+        *live = cfg.clone();
     }
-    cfg.save().map_err(|e| format!("{e:#}"))?;
     sync_profile_menu(&profile_menu, &cfg);
     let code = cfg.stt().language.trim().to_string();
     for (item, (c, _)) in lang_menu.items.iter().zip(lang::LANGUAGES) {
         let _ = item.set_checked(*c == code);
     }
     let _ = lang_menu.submenu.set_text(format!("Language: {}", lang::label(&code)));
-    *state.write().unwrap() = cfg;
     log::info!("config saved");
     Ok(())
 }
@@ -649,10 +654,30 @@ pub fn set_hotkey(
         *cfg = next;
     }
     crate::hotkey::set_combo(parsed);
+    // A switch key that clashed with the old hotkey may work with the new one, or the reverse.
+    let switch = state.read().unwrap().stfu.key.clone();
+    crate::hotkey::set_switch(crate::hotkey::switch_key(&switch, &keys));
     let label = crate::hotkey::label(&keys);
     crate::set_tray_tooltip(&app, &label);
     log::info!("hotkey set to {label}");
     Ok(label)
+}
+
+/// Saves STFU mode: on for every take or not, and the key that switches one take. The switch key
+/// applies straight away. Empty `key` means no switch key.
+#[tauri::command]
+pub fn set_stfu(app: tauri::AppHandle, state: State<'_, SharedConfig>, on: bool, key: String) -> Result<(), String> {
+    let key = if key.is_empty() { key } else { crate::hotkey::canonical(&key) };
+    // Only a newly chosen key is checked. A stored key that clashes with a later hotkey does
+    // nothing (the listener ignores it), and must not stop STFU mode being switched on or off.
+    let (hotkey, stored) = {
+        let cfg = state.read().unwrap();
+        (cfg.hotkey.clone(), cfg.stfu.key.clone())
+    };
+    if key != stored {
+        crate::hotkey::validate_switch(&key, &hotkey).map_err(|e| format!("{e:#}"))?;
+    }
+    crate::set_stfu(&app, crate::config::StfuConfig { on, key }, false).map_err(|e| format!("{e:#}"))
 }
 
 /// What the pill saw during one recording, sent when the recording ends. A pill that drew no

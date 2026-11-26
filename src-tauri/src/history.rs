@@ -89,6 +89,9 @@ pub struct Llm {
     pub model: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wire: Option<String>,
+    /// "clean" or "stfu" (condensed). Empty in records written before STFU mode existed.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub style: String,
     pub duration_ms: u64,
     /// The prompt's user message: the transcript plus any language hint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
