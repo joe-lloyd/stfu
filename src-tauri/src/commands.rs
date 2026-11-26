@@ -7,6 +7,9 @@ use tauri::menu::{CheckMenuItem, Submenu};
 use tauri::{Emitter, State, Wry};
 
 /// The tray's language submenu, so a change made in Settings updates the menu too.
+/// The tray's "STFU mode" tick, kept in step when Settings changes it.
+pub struct StfuMenu(pub CheckMenuItem<Wry>);
+
 pub struct LangMenu {
     pub items: Vec<CheckMenuItem<Wry>>,
     pub submenu: Submenu<Wry>,
@@ -37,6 +40,7 @@ pub fn save_config(
         cfg.hotkey = live.hotkey.clone();
         cfg.hotkey_rev = live.hotkey_rev;
         cfg.dictionary = live.dictionary.clone();
+        cfg.stfu = live.stfu.clone();
     }
     cfg.save().map_err(|e| format!("{e:#}"))?;
     sync_profile_menu(&profile_menu, &cfg);
@@ -649,10 +653,32 @@ pub fn set_hotkey(
         *cfg = next;
     }
     crate::hotkey::set_combo(parsed);
+    // A switch key that clashed with the old hotkey may work with the new one, or the reverse.
+    let switch = state.read().unwrap().stfu.key.clone();
+    crate::hotkey::set_switch(crate::hotkey::switch_key(&switch, &keys));
     let label = crate::hotkey::label(&keys);
     crate::set_tray_tooltip(&app, &label);
     log::info!("hotkey set to {label}");
     Ok(label)
+}
+
+/// Saves STFU mode: on for every take or not, and the key that switches one take. The switch key
+/// applies straight away. Empty `key` means no switch key.
+#[tauri::command]
+pub fn set_stfu(app: tauri::AppHandle, state: State<'_, SharedConfig>, on: bool, key: String) -> Result<(), String> {
+    let hotkey = state.read().unwrap().hotkey.clone();
+    crate::hotkey::validate_switch(&key, &hotkey).map_err(|e| format!("{e:#}"))?;
+    let key = if key.is_empty() { key } else { crate::hotkey::canonical(&key) };
+    {
+        let mut cfg = state.write().unwrap();
+        let mut next = cfg.clone();
+        next.stfu.key = key.clone();
+        next.save().map_err(|e| format!("{e:#}"))?;
+        *cfg = next;
+    }
+    crate::hotkey::set_switch(crate::hotkey::switch_key(&key, &hotkey));
+    log::info!("STFU switch key: {}", if key.is_empty() { "none" } else { &key });
+    crate::set_stfu_on(&app, on).map_err(|e| format!("{e:#}"))
 }
 
 /// What the pill saw during one recording, sent when the recording ends. A pill that drew no

@@ -229,6 +229,37 @@ fn release_pill(app: &AppHandle, take: u64) {
     }
 }
 
+/// Tells the pill which style the take will be cleaned up in, while `take` owns it.
+fn set_take_style(app: &AppHandle, take: u64, style: llm::Style) {
+    if PILL_OWNER.load(Ordering::SeqCst) == take {
+        let _ = app.emit_to(PILL, "style", style.name());
+    }
+}
+
+/// The style for a take: STFU when it is on in the config, flipped if the switch key was pressed.
+fn take_style(cfg: &Config, switched: bool) -> llm::Style {
+    if cfg.stfu.on != switched {
+        llm::Style::Stfu
+    } else {
+        llm::Style::Clean
+    }
+}
+
+/// Turns STFU mode on or off for every take, from the tray or Settings, and keeps both in step.
+pub(crate) fn set_stfu_on(app: &AppHandle, on: bool) -> anyhow::Result<()> {
+    let shared = app.state::<SharedConfig>();
+    let mut cfg = shared.write().unwrap();
+    let mut next = cfg.clone();
+    next.stfu.on = on;
+    next.save()?;
+    *cfg = next;
+    drop(cfg);
+    let _ = app.state::<commands::StfuMenu>().0.set_checked(on);
+    let _ = app.emit_to(SETTINGS, "config-changed", ());
+    log::info!("STFU mode {}", if on { "on" } else { "off" });
+    Ok(())
+}
+
 fn pill(app: &AppHandle) -> Option<WebviewWindow> {
     app.get_webview_window(PILL)
 }
@@ -500,6 +531,7 @@ pub fn run() {
             commands::dictionary_preview,
             commands::dictionary_suggest,
             commands::pill_report,
+            commands::set_stfu,
         ])
         .on_window_event(|window, event| {
             // Closing the settings window hides it so it can be reopened from the tray.
@@ -572,6 +604,10 @@ pub fn run() {
             // Tray with Settings, Language, Launch at login, Check for updates and Quit; the app has no main window.
             let settings = MenuItemBuilder::with_id("settings", "Settings…").build(app)?;
             let copy_last = MenuItemBuilder::with_id("copy-last", "Copy last dictation").build(app)?;
+            let stfu = CheckMenuItemBuilder::with_id("stfu", "STFU mode: just the point")
+                .checked(config.stfu.on)
+                .build(app)?;
+            app.manage(commands::StfuMenu(stfu.clone()));
             let autostart = CheckMenuItemBuilder::with_id("autostart", "Launch at login")
                 .checked(config.launch_at_login)
                 .build(app)?;
@@ -581,7 +617,7 @@ pub fn run() {
                 .items(&[&settings, &copy_last])
                 .item(&profile_menu)
                 .item(&language_menu)
-                .items(&[&autostart])
+                .items(&[&stfu, &autostart])
                 .separator();
             #[cfg(target_os = "macos")]
             let meeting_item = MenuItemBuilder::with_id("meeting", START_MEETING).build(app)?;
@@ -592,6 +628,7 @@ pub fn run() {
                 .separator();
             let menu = menu.items(&[&update, &quit]).build()?;
             let autostart_item = autostart.clone();
+            let stfu_item = stfu.clone();
             let shared_for_tray = shared.clone();
             let lang_items_for_tray = lang_items.clone();
             let language_menu_for_tray = language_menu.clone();
@@ -607,6 +644,14 @@ pub fn run() {
                     #[cfg(target_os = "macos")]
                     "meeting-copy" => copy_last_meeting(),
                     "update" => updater::check_now(app.clone()),
+                    "stfu" => {
+                        // The menu has already flipped the tick; the config follows it.
+                        let on = stfu_item.is_checked().unwrap_or(false);
+                        if let Err(e) = set_stfu_on(app, on) {
+                            log::error!("could not save STFU mode: {e:#}");
+                            let _ = stfu_item.set_checked(!on);
+                        }
+                    }
                     id if id.starts_with("profile:") => {
                         let name = id.trim_start_matches("profile:").to_string();
                         if let Err(e) = commands::set_active_profile(
@@ -747,6 +792,7 @@ pub fn run() {
                 .collect::<anyhow::Result<Vec<_>>>()
                 .map_err(|e| std::io::Error::other(e.to_string()))?;
             let (tx, rx) = mpsc::channel::<HotkeyEvent>();
+            hotkey::set_switch(hotkey::switch_key(&config.stfu.key, &config.hotkey));
             hotkey::spawn(keys, tx);
 
             let recorder = Recorder::spawn();
@@ -781,6 +827,8 @@ fn pipeline_loop(
     let mut take = history::new_record();
     // The take's claim on the pill (see `claim_pill`).
     let mut take_no = 0;
+    // The switch key was pressed an odd number of times during this take (see `take_style`).
+    let mut switched = false;
     // The previous take's processing, which the next one waits for so pastes keep their order.
     let mut previous: Option<tokio::task::JoinHandle<()>> = None;
 
@@ -800,6 +848,8 @@ fn pipeline_loop(
                         take = history::new_record();
                         take.target_app = history::frontmost_app();
                         take_no = claim_pill(&app);
+                        switched = false;
+                        set_take_style(&app, take_no, take_style(&cfg.read().unwrap(), false));
                         set_take_state(&app, take_no, "recording", None);
                         let app2 = app.clone();
                         std::thread::spawn(move || {
@@ -810,6 +860,15 @@ fn pipeline_loop(
                     }
                     Err(e) => log::error!("start recording: {e:#}"),
                 }
+            }
+            HotkeyEvent::Switch => {
+                if !recording {
+                    continue;
+                }
+                switched = !switched;
+                let style = take_style(&cfg.read().unwrap(), switched);
+                log::info!("switch key: this take is {}", style.name());
+                set_take_style(&app, take_no, style);
             }
             HotkeyEvent::Cancel => {
                 if !recording {
@@ -839,6 +898,7 @@ fn pipeline_loop(
                 }
                 let held = started_at.elapsed();
                 let snapshot = cfg.read().unwrap().clone();
+                let style = take_style(&snapshot, switched);
                 let mut rec = std::mem::replace(&mut take, history::new_record());
                 rec.profile = snapshot.active_profile.clone();
                 rec.language = snapshot.stt().language.trim().to_string();
@@ -890,7 +950,7 @@ fn pipeline_loop(
                     }
                     let t0 = Instant::now();
                     let result =
-                        process(&app2, no, &holding2, &snapshot, &client2, wav, &mut rec).await;
+                        process(&app2, no, &holding2, &snapshot, &client2, wav, style, &mut rec).await;
                     rec.total_ms = t0.elapsed().as_millis() as u64;
                     if let Err(e) = &result {
                         rec.outcome = "failed".into();
@@ -915,6 +975,7 @@ struct Done {
 
 /// Returns `Ok(None)` when there was nothing worth pasting (no speech), so the caller stays quiet.
 /// Fills `rec` with each stage's input, output and timing as it goes, including on failure.
+#[allow(clippy::too_many_arguments)]
 async fn process(
     app: &AppHandle,
     take_no: u64,
@@ -922,6 +983,7 @@ async fn process(
     cfg: &Config,
     client: &reqwest::Client,
     wav: Vec<u8>,
+    style: llm::Style,
     rec: &mut history::Record,
 ) -> anyhow::Result<Option<Done>> {
     let t0 = Instant::now();
@@ -966,11 +1028,16 @@ async fn process(
     rec.llm.base_url = cfg.llm().base_url.clone();
     rec.llm.model = cfg.llm().model.clone();
     let text = if cfg.llm().enabled {
-        set_take_state(app, take_no, "processing", Some("Cleaning up…".into()));
+        let doing = match style {
+            llm::Style::Clean => "Cleaning up…",
+            llm::Style::Stfu => "Getting to the point…",
+        };
+        set_take_state(app, take_no, "processing", Some(doing.into()));
         let t1 = Instant::now();
         let mut trace = llm::Trace::default();
-        let cleaned = llm::cleanup_traced(client, cfg, &raw, &mut trace).await;
+        let cleaned = llm::cleanup_traced(client, cfg, &raw, style, &mut trace).await;
         rec.llm.duration_ms = t1.elapsed().as_millis() as u64;
+        rec.llm.style = trace.style.name().into();
         rec.llm.wire = trace.wire.map(|w| format!("{w:?}").to_ascii_lowercase());
         rec.llm.prompt = trace.prompt;
         rec.llm.reply = trace.reply;
@@ -988,6 +1055,9 @@ async fn process(
             }
         }
     } else {
+        if style == llm::Style::Stfu {
+            log::warn!("STFU take, but this profile's clean-up model is off: pasting the transcript as heard");
+        }
         raw.clone()
     };
     let (text, fixes) = dictionary::resolve(&text, &cfg.dictionary);

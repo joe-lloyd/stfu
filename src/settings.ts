@@ -18,7 +18,9 @@ interface Config {
   clipboard?: ClipboardMode;
   meeting?: MeetingConfig;
   dictionary?: DictEntry[];
+  stfu?: StfuConfig;
 }
+interface StfuConfig { on: boolean; key: string }
 type ClipboardMode = "when_no_text_field" | "always" | "never";
 interface HotkeyChoices { keys: { name: string; label: string }[]; current: string[]; label: string }
 interface LastDictation { text: string; ts: string; app: string | null }
@@ -209,6 +211,8 @@ function collect(): Config {
     meeting: meetingOptions(cfg.meeting),
     // Owned by the Dictionary tab, which saves it on its own; sent along so Test uses it.
     dictionary: dictionaryEntries(),
+    // Owned by the STFU section, which saves it on its own.
+    stfu: cfg.stfu,
   };
 }
 
@@ -338,8 +342,40 @@ async function load() {
 let hotkeyCurrent: string[] = [];
 let hotkeyOffered: string[] = [];
 
+/** The switch-key menu offers every key the hotkey does not already use. */
+function renderStfu(h: HotkeyChoices) {
+  const stfu = cfg.stfu ?? { on: false, key: "" };
+  $<HTMLInputElement>("stfu-on").checked = stfu.on;
+  const free = h.keys.filter((k) => !h.current.includes(k.name));
+  const options = [{ name: "", label: "No switch key" }, ...free];
+  // A key written into the config by hand, or one the hotkey now uses, stays visible.
+  if (stfu.key && !options.some((o) => o.name === stfu.key)) options.push({ name: stfu.key, label: stfu.key });
+  $<HTMLSelectElement>("stfu-key").innerHTML = options
+    .map((k) => `<option value="${k.name}">${k.name ? `Press ${k.label} while holding ${h.label}` : k.label}</option>`)
+    .join("");
+  $<HTMLSelectElement>("stfu-key").value = stfu.key;
+  if (stfu.key && h.current.includes(stfu.key)) {
+    setStatus("stfu-status", `${stfu.key} is now part of the hotkey, so it cannot switch a take. Pick another key.`, "err");
+  } else {
+    setStatus("stfu-status", "");
+  }
+}
+
+async function saveStfu() {
+  const next: StfuConfig = { on: $<HTMLInputElement>("stfu-on").checked, key: $<HTMLSelectElement>("stfu-key").value };
+  try {
+    await invoke("set_stfu", { on: next.on, key: next.key });
+    cfg.stfu = next;
+    setStatus("stfu-status", next.on ? "Saved. Every take is condensed." : "Saved.", "ok");
+  } catch (e) {
+    setStatus("stfu-status", String(e), "err");
+    renderStfu(await invoke<HotkeyChoices>("hotkey_choices"));
+  }
+}
+
 async function renderHotkey() {
   const h = await invoke<HotkeyChoices>("hotkey_choices");
+  renderStfu(h);
   hotkeyCurrent = h.current;
   hotkeyOffered = h.keys.map((k) => k.name);
   $("hotkey").textContent = h.label;
@@ -487,6 +523,8 @@ $("hotkey-keys").addEventListener("change", () => {
   setStatus("hotkey-status", "");
 });
 $("hotkey-apply").addEventListener("click", () => void applyHotkey());
+$("stfu-on").addEventListener("change", () => void saveStfu());
+$("stfu-key").addEventListener("change", () => void saveStfu());
 $("last-copy").addEventListener("click", () => void copyLast());
 $("clipboard-mode").addEventListener("change", async (e) => {
   const mode = (e.target as HTMLSelectElement).value as ClipboardMode;

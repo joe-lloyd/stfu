@@ -166,6 +166,15 @@ Default hotkey is Ctrl+Win (`["ControlLeft", "MetaLeft"]`). There are no permiss
 - **The tray icon is hidden by default.** Click the `^` arrow next to the clock and drag the waveform icon onto the taskbar.
 - **Microphone privacy.** If nothing is recorded, allow desktop apps to use the microphone under Settings > Privacy & security > Microphone. Settings shows a Microphone row that goes red when the device cannot be opened. The keyboard hook cannot see elevated (admin) windows, so dictation into an admin PowerShell will not work unless stfu also runs elevated.
 
+## STFU mode
+
+For when you ramble. Instead of keeping every word, the clean-up model keeps every point and cuts every wasted word: fillers, repetition, thinking out loud, empty hedging. It leads with the point or the request, turns three or more points into a bullet list, and writes as you, in the first person. Questions and requests in the ramble stay questions and requests; they are never answered.
+
+- **For every take:** tick **STFU mode** in the menu bar, or in Settings › STFU mode.
+- **For one take:** press the switch key while you hold the hotkey: **Option** on a Mac, **Alt** on Windows. The wave turns purple; press it again to switch back. With STFU mode on for every take, the switch key gives that one take plain clean-up instead. Change or turn off the key in Settings; it cannot be one of the hotkey's own keys.
+
+Takes under 20 words are only cleaned up: there is nothing to cut, and a short question is what a model is most tempted to answer. Measured on real long takes with the default Groq model: 250 to 530 words came out at 70 to 150, in under 1.2 s. The reply leaves out the copy of the transcript that plain clean-up asks for, because on a long take that copy was most of the output: it made a 500-word take take 4 s, and Groq's free tier allows only 1,000 output tokens a minute. The check that the model did not answer you is looser here than for plain clean-up, because a summary drops most of your words. History marks STFU takes with a purple badge. Stored as `stfu: {on, key}` in the config file.
+
 ## Dictionary
 
 Settings › Dictionary holds the names and words the transcriber keeps getting wrong, and words that must be written one way. Each entry is the word as it should appear ("Koen") plus the spellings it tends to come out as ("Kuhn, Koon, Cohen"). An entry is used three ways:

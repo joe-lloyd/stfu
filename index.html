@@ -33,6 +33,9 @@
         position: absolute; top: 7.5%; height: 85%; left: calc(var(--x, 0px) + 1.25px); width: var(--bar, 2px);
         border-radius: 999px; background: #8fd6ff; transform: scaleY(.06); will-change: transform;
       }
+      /* STFU take (main.ts): purple while recording, so a press of the switch key shows at once. */
+      #pill.stfu.recording #light { background: #b98cff; box-shadow: 0 0 10px 2px rgba(185,140,255,0.6); }
+      #pill.stfu.recording #strip i { background: #c9a2ff; }
       #pill.processing #strip i { background: #f5c542; }
       #pill.done #strip i { background: #3ddc84; }
       /* "processing": a wave travels left to right; the strip swells it in from flat. */

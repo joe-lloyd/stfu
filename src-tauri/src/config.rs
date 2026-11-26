@@ -97,6 +97,34 @@ pub struct Config {
     /// dictionary.rs). Shared by every profile.
     #[serde(default)]
     pub dictionary: Vec<crate::dictionary::Entry>,
+    /// STFU mode: condense a ramble to its points instead of keeping every word.
+    #[serde(default)]
+    pub stfu: StfuConfig,
+}
+
+/// STFU mode condenses what was said to its points (see llm.rs). It can be on for every take, or
+/// switched for one take by pressing `key` while the hotkey is held.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StfuConfig {
+    /// Every take is condensed. The switch key then gives one take plain clean-up instead.
+    #[serde(default)]
+    pub on: bool,
+    /// Pressing this key while the hotkey is held switches that one take to the other style.
+    /// A name from `hotkey::CHOICES`; empty means no switch key.
+    #[serde(default = "default_stfu_key")]
+    pub key: String,
+}
+
+impl Default for StfuConfig {
+    fn default() -> Self {
+        Self { on: false, key: default_stfu_key() }
+    }
+}
+
+/// Option on a Mac and Alt elsewhere: a modifier, so it never types anything or cancels the
+/// take, and not part of either platform's default hotkey.
+fn default_stfu_key() -> String {
+    if cfg!(target_os = "macos") { "Option" } else { "Alt" }.to_string()
 }
 
 /// Apps whose sound a meeting transcript hears, by bundle id: call apps and browsers. Anything
@@ -292,6 +320,7 @@ impl Default for Config {
             clipboard: ClipboardMode::default(),
             meeting: MeetingConfig::default(),
             dictionary: Vec::new(),
+            stfu: StfuConfig::default(),
         }
     }
 }
