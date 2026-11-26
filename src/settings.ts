@@ -368,8 +368,9 @@ async function saveStfu() {
     cfg.stfu = next;
     setStatus("stfu-status", next.on ? "Saved. Every take is condensed." : "Saved.", "ok");
   } catch (e) {
-    setStatus("stfu-status", String(e), "err");
+    // Put the controls back first: rendering them resets the status line.
     renderStfu(await invoke<HotkeyChoices>("hotkey_choices"));
+    setStatus("stfu-status", String(e), "err");
   }
 }
 

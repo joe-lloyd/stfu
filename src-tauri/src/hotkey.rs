@@ -114,12 +114,12 @@ pub fn validate_switch(key: &str, hotkey: &[String]) -> Result<()> {
     if key.is_empty() {
         return Ok(());
     }
-    parse_key(key)?;
-    let key = canonical(key);
-    if hotkey.iter().any(|k| canonical(k) == key) {
+    // Compared as the listener sees them, so aliases ("WinRight", "MetaRight") are one key.
+    let parsed = parse_key(key)?;
+    if hotkey.iter().any(|k| parse_key(k).ok() == Some(parsed)) {
         return Err(anyhow!(
             "{} is part of the hotkey, so it is already held; pick another key",
-            label(&[key])
+            label(&[key.to_string()])
         ));
     }
     Ok(())
@@ -537,6 +537,25 @@ mod tests {
         assert!(switch_key(outside, &hotkey).is_some());
         assert!(validate_switch("", &hotkey).is_ok(), "no switch key is allowed");
         assert!(validate_switch("Nope", &hotkey).is_err());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn switch_key_aliases_count_as_the_hotkey_key() {
+        let hotkey = vec!["Function".to_string(), "CommandRight".to_string()];
+        assert!(validate_switch("Command", &hotkey).is_err());
+        assert!(validate_switch("CommandLeft", &hotkey).is_err());
+        assert!(validate_switch("Option", &hotkey).is_ok());
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn switch_key_aliases_count_as_the_hotkey_key() {
+        let hotkey = vec!["ControlLeft".to_string(), "WinRight".to_string()];
+        assert!(validate_switch("MetaRight", &hotkey).is_err());
+        assert!(validate_switch("CommandRight", &hotkey).is_err());
+        let default = vec!["ControlLeft".to_string(), "MetaLeft".to_string()];
+        assert!(validate_switch("Alt", &default).is_ok(), "the default switch key works with the default hotkey");
     }
 
     #[test]

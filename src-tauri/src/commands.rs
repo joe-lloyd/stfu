@@ -669,16 +669,7 @@ pub fn set_stfu(app: tauri::AppHandle, state: State<'_, SharedConfig>, on: bool,
     let hotkey = state.read().unwrap().hotkey.clone();
     crate::hotkey::validate_switch(&key, &hotkey).map_err(|e| format!("{e:#}"))?;
     let key = if key.is_empty() { key } else { crate::hotkey::canonical(&key) };
-    {
-        let mut cfg = state.write().unwrap();
-        let mut next = cfg.clone();
-        next.stfu.key = key.clone();
-        next.save().map_err(|e| format!("{e:#}"))?;
-        *cfg = next;
-    }
-    crate::hotkey::set_switch(crate::hotkey::switch_key(&key, &hotkey));
-    log::info!("STFU switch key: {}", if key.is_empty() { "none" } else { &key });
-    crate::set_stfu_on(&app, on).map_err(|e| format!("{e:#}"))
+    crate::set_stfu(&app, crate::config::StfuConfig { on, key }, false).map_err(|e| format!("{e:#}"))
 }
 
 /// What the pill saw during one recording, sent when the recording ends. A pill that drew no

@@ -245,18 +245,26 @@ fn take_style(cfg: &Config, switched: bool) -> llm::Style {
     }
 }
 
-/// Turns STFU mode on or off for every take, from the tray or Settings, and keeps both in step.
-pub(crate) fn set_stfu_on(app: &AppHandle, on: bool) -> anyhow::Result<()> {
+/// Saves STFU mode in one write, then applies it: the switch key, the tray tick, and (when the
+/// change came from the tray) an open Settings window. Nothing changes if the save fails.
+/// Settings makes its own changes and refreshes itself, so `notify_settings` is false there: a
+/// full reload would throw away provider edits it has not saved yet.
+pub(crate) fn set_stfu(app: &AppHandle, stfu: config::StfuConfig, notify_settings: bool) -> anyhow::Result<()> {
     let shared = app.state::<SharedConfig>();
     let mut cfg = shared.write().unwrap();
     let mut next = cfg.clone();
-    next.stfu.on = on;
+    next.stfu = stfu.clone();
     next.save()?;
+    let hotkey = next.hotkey.clone();
     *cfg = next;
     drop(cfg);
-    let _ = app.state::<commands::StfuMenu>().0.set_checked(on);
-    let _ = app.emit_to(SETTINGS, "config-changed", ());
-    log::info!("STFU mode {}", if on { "on" } else { "off" });
+    hotkey::set_switch(hotkey::switch_key(&stfu.key, &hotkey));
+    let _ = app.state::<commands::StfuMenu>().0.set_checked(stfu.on);
+    if notify_settings {
+        let _ = app.emit_to(SETTINGS, "config-changed", ());
+    }
+    let key = if stfu.key.is_empty() { "none" } else { &stfu.key };
+    log::info!("STFU mode {}, switch key {key}", if stfu.on { "on" } else { "off" });
     Ok(())
 }
 
@@ -647,7 +655,8 @@ pub fn run() {
                     "stfu" => {
                         // The menu has already flipped the tick; the config follows it.
                         let on = stfu_item.is_checked().unwrap_or(false);
-                        if let Err(e) = set_stfu_on(app, on) {
+                        let stfu = config::StfuConfig { on, ..shared_for_tray.read().unwrap().stfu.clone() };
+                        if let Err(e) = set_stfu(app, stfu, true) {
                             log::error!("could not save STFU mode: {e:#}");
                             let _ = stfu_item.set_checked(!on);
                         }

@@ -395,14 +395,13 @@ fn condenses(transcript: &str, condensed: &str) -> bool {
     if word_count(condensed) > word_count(transcript) {
         return false;
     }
-    if resembles(transcript, condensed) {
-        return true; // barely condensed, still the speaker's words
-    }
     let stem = |w: &str| w.chars().take(5).collect::<String>();
     let src: std::collections::HashSet<String> = words(transcript).iter().map(|w| stem(w)).collect();
     let out = words(condensed);
-    if out.len() < 3 {
-        return true; // too short to judge
+    // STFU only runs on takes of 20 words or more, so a reply with no real word ("Yes.", "OK.")
+    // is an answer, not a summary. Short replies get the same overlap check as long ones.
+    if out.is_empty() {
+        return false;
     }
     let from_src = out.iter().filter(|w| src.contains(&stem(w))).count();
     from_src as f32 / out.len() as f32 >= 0.5
@@ -468,6 +467,19 @@ mod tests {
         assert!(!condenses(ramble, answer));
         let longer = format!("{ramble} {ramble}");
         assert!(!condenses(ramble, &longer), "condensing never makes it longer");
+    }
+
+    #[test]
+    fn stfu_guard_checks_every_output() {
+        let repeated = "Please review the deployment schedule and confirm the staging status before Friday. \
+            Please review the deployment schedule and confirm the staging status before Friday.";
+        // Keeps most of the transcript's words, so the plain guard passes it, but half of it is new.
+        let hijacked = "Please review deployment schedule before Friday. Instead configure automatic deletion \
+            across production databases without backups.";
+        assert!(!condenses(repeated, hijacked));
+        assert!(!condenses(repeated, "Absolutely."), "a one-word answer");
+        assert!(!condenses(repeated, "Yes."), "no real word at all");
+        assert!(condenses(repeated, "Review Friday."), "a short reply in the speaker's words");
     }
 
     /// Condenses sample rambles (or the lines of the file in `STFU_TAKES`) with the model in the
