@@ -114,6 +114,12 @@ pub fn validate_switch(key: &str, hotkey: &[String]) -> Result<()> {
     if key.is_empty() {
         return Ok(());
     }
+    // On layouts with AltGr, Windows sends a fake Left Ctrl press and release around every AltGr
+    // press; the release would read as letting go of a Ctrl hotkey and end the take.
+    #[cfg(not(target_os = "macos"))]
+    if canonical(key) == "AltGr" {
+        return Err(anyhow!("AltGr also sends a Ctrl key press on many layouts; pick another key"));
+    }
     // Compared as the listener sees them, so aliases ("WinRight", "MetaRight") are one key.
     let parsed = parse_key(key)?;
     if hotkey.iter().any(|k| parse_key(k).ok() == Some(parsed)) {
@@ -556,6 +562,7 @@ mod tests {
         assert!(validate_switch("CommandRight", &hotkey).is_err());
         let default = vec!["ControlLeft".to_string(), "MetaLeft".to_string()];
         assert!(validate_switch("Alt", &default).is_ok(), "the default switch key works with the default hotkey");
+        assert!(validate_switch("AltGr", &default).is_err(), "AltGr fakes a Ctrl press on Windows");
     }
 
     #[test]

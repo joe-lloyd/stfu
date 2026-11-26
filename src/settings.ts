@@ -346,7 +346,8 @@ let hotkeyOffered: string[] = [];
 function renderStfu(h: HotkeyChoices) {
   const stfu = cfg.stfu ?? { on: false, key: "" };
   $<HTMLInputElement>("stfu-on").checked = stfu.on;
-  const free = h.keys.filter((k) => !h.current.includes(k.name));
+  // AltGr is left out: on many layouts Windows fakes a Ctrl press with it, which ends a Ctrl hotkey.
+  const free = h.keys.filter((k) => !h.current.includes(k.name) && k.name !== "AltGr");
   const options = [{ name: "", label: "No switch key" }, ...free];
   // A key written into the config by hand, or one the hotkey now uses, stays visible.
   if (stfu.key && !options.some((o) => o.name === stfu.key)) options.push({ name: stfu.key, label: stfu.key });

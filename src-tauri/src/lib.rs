@@ -858,7 +858,9 @@ fn pipeline_loop(
                         take.target_app = history::frontmost_app();
                         take_no = claim_pill(&app);
                         switched = false;
-                        set_take_style(&app, take_no, take_style(&cfg.read().unwrap(), false));
+                        // Read first: no lock may be held across the pill event.
+                        let style = take_style(&cfg.read().unwrap(), false);
+                        set_take_style(&app, take_no, style);
                         set_take_state(&app, take_no, "recording", None);
                         let app2 = app.clone();
                         std::thread::spawn(move || {
